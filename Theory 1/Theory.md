@@ -1,3 +1,5 @@
+Interest Rate Policy Impact: Specific industries or sectors (e.g., financials, real estate) show predictable reactions to changes or anticipated changes in central bank interest rates.
+
 1. Data Collection (Deep Dive for UK Focus)
 Interest Rate Data (UK Specific):
 
