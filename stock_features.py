@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from stock_data import fetch_single_stock_data, fetch_multiple_stock_data
 
 def calculate_daily_returns(df_input, cols_to_process=['Close']):
     """
@@ -105,10 +106,11 @@ def add_price_range_features(df_input, ticker_prefix):
     if all(col in df.columns for col in [high_col, low_col, open_col, close_col]):
         df[f'{ticker_prefix}_HighLow_Range'] = df[high_col] - df[low_col]
         df[f'{ticker_prefix}_OpenClose_Range'] = df[close_col] - df[open_col]
-        # Avoid division by zero for Close_to_Range_Ratio
+        
         range_denom = df[high_col] - df[low_col]
-        df[f'{ticker_prefix}_Close_to_Range_Ratio'] = (df[close_col] - df[low_col]) / range_denom
-        df[f'{ticker_prefix}_Close_to_Range_Ratio'].fillna(0.5, inplace=True) # If range is 0, assume middle
+        # Use a temporary series, then fillna, then assign
+        close_to_range_ratio = (df[close_col] - df[low_col]) / range_denom
+        df[f'{ticker_prefix}_Close_to_Range_Ratio'] = close_to_range_ratio.fillna(0.5)
     else:
         print(f"Warning: Missing HLOC columns for {ticker_prefix} to calculate range features.")
     return df
@@ -192,18 +194,14 @@ def add_volume_features(df_input, ticker_prefix, window=20):
     volume_col = f'Volume_{ticker_prefix}'
 
     if volume_col in df.columns:
-        # Volume Daily Change
         df[f'{ticker_prefix}_Volume_Daily_Change'] = df[volume_col].pct_change() * 100
-
-        # Volume Moving Average
         df[f'{ticker_prefix}_Volume_MA_{window}D'] = df[volume_col].rolling(window=window, min_periods=1).mean()
-
-        # Volume to MA Ratio (avoid division by zero)
-        # Use .replace to handle potential inf/-inf from division by zero, then fill with NaN
-        df[f'{ticker_prefix}_Volume_MA_Ratio'] = df[volume_col] / df[f'{ticker_prefix}_Volume_MA_{window}D']
-        df[f'{ticker_prefix}_Volume_MA_Ratio'].replace([np.inf, -np.inf], np.nan, inplace=True)
+        
+        # Calculate ratio first, then replace and assign in one step
+        volume_ma_ratio = df[volume_col] / df[f'{ticker_prefix}_Volume_MA_{window}D']
+        df[f'{ticker_prefix}_Volume_MA_Ratio'] = volume_ma_ratio.replace([np.inf, -np.inf], np.nan)
     else:
-        print(f"    Warning: Volume column '{volume_col}' not found for {ticker_prefix}. Skipping volume features.")
+        print(f"Warning: Volume column '{volume_col}' not found for {ticker_prefix}. Skipping volume features.")
     return df
 
 def calculate_obv(df_input, ticker_prefix):
@@ -222,17 +220,16 @@ def calculate_obv(df_input, ticker_prefix):
     volume_col = f'Volume_{ticker_prefix}'
 
     if all(col in df.columns for col in [close_col, volume_col]):
-        # Calculate daily price change direction
-        # 1 if price increased, -1 if price decreased, 0 if no change
         price_direction = np.sign(df[close_col].diff())
-
-        # Multiply price direction by volume and then take cumulative sum
-        # The first OBV value is typically 0 or the first day's volume
-        df[f'{ticker_prefix}_OBV'] = (price_direction * df[volume_col]).cumsum()
-        df[f'{ticker_prefix}_OBV'].iloc[0] = 0 # Set first value to 0 or first volume if preferred
-
+        obv = (price_direction * df[volume_col]).cumsum()
+        
+        # Correctly set the first value using .loc
+        # This avoids the ChainedAssignmentError and SettingWithCopyWarning
+        obv.loc[df.index[0]] = 0 
+        
+        df[f'{ticker_prefix}_OBV'] = obv
     else:
-        print(f"    Warning: Missing Close or Volume column for {ticker_prefix}. Skipping OBV calculation.")
+        print(f"Warning: Missing Close or Volume column for {ticker_prefix}. Skipping OBV calculation.")
     return df
 
 def calculate_rsi(df_input, ticker_prefix, window=14):
@@ -336,14 +333,17 @@ def add_bollinger_bands(df_input, ticker_prefix, window=20, num_std=2):
         df[f'{ticker_prefix}_BB_Upper{window}'] = middle_band + (std_dev * num_std)
         df[f'{ticker_prefix}_BB_Lower{window}'] = middle_band - (std_dev * num_std)
 
-        # Bandwidth: Indicates volatility (wider bands = higher volatility)
+        # Bandwidth: Indicates volatility
         df[f'{ticker_prefix}_BB_Bandwidth{window}'] = (df[f'{ticker_prefix}_BB_Upper{window}'] - df[f'{ticker_prefix}_BB_Lower{window}']) / middle_band
 
-        # %B: Indicates where the price is relative to the bands (0 = lower band, 1 = upper band, >1 above upper, <0 below lower)
+        # %B: Indicates where the price is relative to the bands
         # Avoid division by zero
         denom = (df[f'{ticker_prefix}_BB_Upper{window}'] - df[f'{ticker_prefix}_BB_Lower{window}'])
-        df[f'{ticker_prefix}_BB_PctB{window}'] = (df[close_col] - df[f'{ticker_prefix}_BB_Lower{window}']) / denom
-        df[f'{ticker_prefix}_BB_PctB{window}'].replace([np.inf, -np.inf], np.nan, inplace=True)
+        
+        # CORRECTED: Calculate the series and then replace inf values before assigning
+        pct_b_series = (df[close_col] - df[f'{ticker_prefix}_BB_Lower{window}']) / denom
+        df[f'{ticker_prefix}_BB_PctB{window}'] = pct_b_series.replace([np.inf, -np.inf], np.nan)
+        
     else:
         print(f"Warning: Close column for {ticker_prefix} not found for Bollinger Bands calculation.")
     return df
@@ -505,7 +505,7 @@ def add_time_based_features(df_input):
         print("    Warning: DataFrame index is not a DatetimeIndex. Skipping time-based features.")
     return df
 
-def prepare_data_for_ml(tickers, start_date, end_date, output_raw_csv=None):
+def prepare_data_for_ml(tickers, start_date, end_date, output_raw_csv=None, output_engineered_csv="engineered_stock_data.csv"):
     """
     Orchestrates the data fetching and feature engineering pipeline.
 
@@ -514,18 +514,28 @@ def prepare_data_for_ml(tickers, start_date, end_date, output_raw_csv=None):
     start_date (str): Start date for data fetching.
     end_date (str): End date for data fetching.
     output_raw_csv (str, optional): Filename to save the raw combined data.
+    output_engineered_csv (str, optional): Filename to save the final engineered data.
 
     Returns:
     pd.DataFrame: A DataFrame with all engineered features and target variables.
     """
     print("\n--- Starting Data Preparation Pipeline ---")
 
+    # 1. Fetch raw historical data for multiple stocks
+    # This must be the first step to create the 'df' variable
+    df = fetch_multiple_stock_data(tickers, start_date, end_date, output_filename=output_raw_csv)
+    if df.empty:
+        print("Pipeline stopped: No data fetched or data is empty after initial processing.")
+        return pd.DataFrame()
+
+    # Get a list of the ticker prefixes for iteration (e.g., 'AAPL', 'MSFT')
     stock_prefixes = sorted(list(set([col.split('_')[1] for col in df.columns if '_' in col])))
     print(f"\nDiscovered stock prefixes: {stock_prefixes}")
 
+    # 2. Apply stock-specific features inside the loop
     for prefix in stock_prefixes:
         print(f"\nProcessing features for stock prefix: {prefix}")
-
+        
         # Price Range Features (needs High, Low, Open, Close)
         df = add_price_range_features(df, prefix)
 
@@ -549,35 +559,56 @@ def prepare_data_for_ml(tickers, start_date, end_date, output_raw_csv=None):
 
         # Moving Averages (needs Close)
         df = add_moving_averages(df, prefix, window_sizes=[10, 20, 50], ma_type='SMA')
-        df = add_moving_averages(df, prefix, window_sizes=[12, 26], ma_type='EMA') # For typical MACD bases or general EMA
+        df = add_moving_averages(df, prefix, window_sizes=[12, 26], ma_type='EMA')
 
         # Bollinger Bands (needs Close)
-        df = add_bollinger_bands(df, prefix, window=20, num_std_dev=2)
+        df = add_bollinger_bands(df, prefix, window=20, num_std=2)
 
         # Stochastic Oscillator (needs High, Low, Close)
         df = calculate_stochastic_oscillator(df, prefix, k_period=14, d_period=3)
 
         # ADX (needs High, Low, Close, and True Range)
         df = calculate_adx(df, prefix, window=14)
+    
+    # 3. Apply features that depend on all stocks or can be applied once
+    # This must happen OUTSIDE the loop for efficiency and correctness.
+    
+    print("\nApplying general features and targets...")
+    
+    # Get a list of all 'Close' columns
+    close_cols_for_returns = [col for col in df.columns if col.startswith('Close_')]
+    
+    # Daily Returns (needs all Close columns)
+    df = calculate_daily_returns(df, close_cols_for_returns)
 
-        # Daily Returns (for ALL Close columns) - Needs to be done BEFORE next_day_targets and before lagging returns
-        close_cols_for_returns = [f'Close_{prefix}' for prefix in stock_prefixes if f'Close_{prefix}' in df.columns]
-        df = calculate_daily_returns(df, close_cols_for_returns)
+    # Next Day Targets (depends on daily returns)
+    df = create_next_day_targets(df, close_cols_for_returns)
 
-        # Next Day Targets (depends on daily returns)
-        df = create_next_day_targets(df, close_cols_for_returns)
-        
-        # Lagged Features (can lag *any* already created feature)
-        # Define which features you want to lag. Can be price, volume, or indicators.
-        features_to_lag = []
-        for prefix in stock_prefixes:
-            # Example: Lagging Close prices, daily returns, and RSI
-            features_to_lag.extend([
-                f'Close_{prefix}',
-                f'Close_{prefix}_daily_return',
-                f'{prefix}_RSI14',
-                f'{prefix}_Volume_MA_Ratio'
-            ])
-        lag_periods = [1, 3, 5] # Lag by 1, 3, and 5 periods
-        df = add_lagged_features(df, features_to_lag, lag_periods)
+    # Lagged Features (needs features that are already created)
+    features_to_lag = []
+    for prefix in stock_prefixes:
+        features_to_lag.extend([
+            f'Close_{prefix}',
+            f'Close_{prefix}_daily_return',
+            f'{prefix}_RSI14',
+            f'{prefix}_Volume_MA_Ratio'
+        ])
+    lag_periods = [1, 3, 5]
+    df = add_lagged_features(df, features_to_lag, lag_periods)
 
+    # Time-based Features (general)
+    #df = add_time_based_features(df)
+
+    # 4. Final Data Cleanup
+    initial_rows = len(df)
+    df.dropna(inplace=True)
+    rows_dropped = initial_rows - len(df)
+    print(f"\nDropped {rows_dropped} rows due to NaN values after feature engineering.")
+
+    print("\n--- Data Preparation Complete ---")
+    
+    # 5. Save the final DataFrame
+    df.to_csv(output_engineered_csv)
+    print(f"Final engineered data saved to {output_engineered_csv}")
+    
+    return df
