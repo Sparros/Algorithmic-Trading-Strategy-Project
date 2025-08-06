@@ -505,6 +505,181 @@ def add_time_based_features(df_input):
         print("    Warning: DataFrame index is not a DatetimeIndex. Skipping time-based features.")
     return df
 
+# def prepare_data_for_ml(tickers, start_date, end_date, output_raw_csv=None, output_engineered_csv="engineered_stock_data.csv"):
+#     """
+#     Orchestrates the data fetching and feature engineering pipeline.
+
+#     Parameters:
+#     tickers (list): List of stock ticker symbols.
+#     start_date (str): Start date for data fetching.
+#     end_date (str): End date for data fetching.
+#     output_raw_csv (str, optional): Filename to save the raw combined data.
+#     output_engineered_csv (str, optional): Filename to save the final engineered data.
+
+#     Returns:
+#     pd.DataFrame: A DataFrame with all engineered features and target variables.
+#     """
+#     print("\n--- Starting Data Preparation Pipeline ---")
+
+#     # 1. Fetch raw historical data for multiple stocks
+#     # This must be the first step to create the 'df' variable
+#     df = fetch_multiple_stock_data(tickers, start_date, end_date, output_filename=output_raw_csv)
+#     if df.empty:
+#         print("Pipeline stopped: No data fetched or data is empty after initial processing.")
+#         return pd.DataFrame()
+
+#     # Get a list of the ticker prefixes for iteration (e.g., 'AAPL', 'MSFT')
+#     stock_prefixes = sorted(list(set([col.split('_')[1] for col in df.columns if '_' in col])))
+#     print(f"\nDiscovered stock prefixes: {stock_prefixes}")
+
+#     # 2. Apply stock-specific features inside the loop
+#     for prefix in stock_prefixes:
+#         print(f"\nProcessing features for stock prefix: {prefix}")
+        
+#         # Price Range Features (needs High, Low, Open, Close)
+#         df = add_price_range_features(df, prefix)
+
+#         # True Range (needs High, Low, Close) - Required for ATR and ADX
+#         df = calculate_true_range(df, prefix)
+
+#         # ATR (needs True Range)
+#         df = calculate_atr(df, prefix, window=14)
+
+#         # Volume Features (needs Volume)
+#         df = add_volume_features(df, prefix, window=20)
+
+#         # OBV (needs Close, Volume)
+#         df = calculate_obv(df, prefix)
+
+#         # RSI (needs Close)
+#         df = calculate_rsi(df, prefix, window=14)
+
+#         # MACD (needs Close)
+#         df = calculate_macd(df, prefix, fast_period=12, slow_period=26, signal_period=9)
+
+#         # Moving Averages (needs Close)
+#         df = add_moving_averages(df, prefix, window_sizes=[10, 20, 50], ma_type='SMA')
+#         df = add_moving_averages(df, prefix, window_sizes=[12, 26], ma_type='EMA')
+
+#         # Bollinger Bands (needs Close)
+#         df = add_bollinger_bands(df, prefix, window=20, num_std=2)
+
+#         # Stochastic Oscillator (needs High, Low, Close)
+#         df = calculate_stochastic_oscillator(df, prefix, k_period=14, d_period=3)
+
+#         # ADX (needs High, Low, Close, and True Range)
+#         df = calculate_adx(df, prefix, window=14)
+    
+#     # 3. Apply features that depend on all stocks or can be applied once
+#     # This must happen OUTSIDE the loop for efficiency and correctness.
+    
+#     print("\nApplying general features and targets...")
+    
+#     # Get a list of all 'Close' columns
+#     close_cols_for_returns = [col for col in df.columns if col.startswith('Close_')]
+    
+#     # Daily Returns (needs all Close columns)
+#     df = calculate_daily_returns(df, close_cols_for_returns)
+
+#     # Next Day Targets (depends on daily returns)
+#     df = create_next_day_targets(df, close_cols_for_returns)
+
+#     # Lagged Features (needs features that are already created)
+#     features_to_lag = []
+#     for prefix in stock_prefixes:
+#         features_to_lag.extend([
+#             f'Close_{prefix}',
+#             f'Close_{prefix}_daily_return',
+#             f'{prefix}_RSI14',
+#             f'{prefix}_Volume_MA_Ratio'
+#         ])
+#     lag_periods = [1, 3, 5]
+#     df = add_lagged_features(df, features_to_lag, lag_periods)
+
+#     # Time-based Features (general)
+#     #df = add_time_based_features(df)
+
+#     # 4. Final Data Cleanup
+#     initial_rows = len(df)
+#     df.dropna(inplace=True)
+#     rows_dropped = initial_rows - len(df)
+#     print(f"\nDropped {rows_dropped} rows due to NaN values after feature engineering.")
+
+#     print("\n--- Data Preparation Complete ---")
+    
+#     # 5. Save the final DataFrame
+#     df.to_csv(output_engineered_csv)
+#     print(f"Final engineered data saved to {output_engineered_csv}")
+    
+#     return df
+
+def add_relative_strength(df, stock_ticker, benchmark_ticker='^GSPC'):
+    """
+    Calculates the relative strength of a stock against a benchmark index.
+    A higher value indicates the stock is outperforming the benchmark.
+    """
+    # Calculate daily returns for both the stock and the benchmark
+    stock_returns = df[f'Close_{stock_ticker}'].pct_change()
+    benchmark_returns = df[f'Close_{benchmark_ticker}'].pct_change()
+    
+    # Calculate relative strength as the ratio of their returns
+    # Add a small value to the denominator to avoid division by zero
+    df[f'{stock_ticker}_vs_{benchmark_ticker}_RelStrength'] = stock_returns / (benchmark_returns + 1e-9)
+    return df
+
+def add_interstock_ratios(df, target_ticker, supplier_tickers):
+    """
+    Calculates the price ratio of a target stock to its suppliers.
+    This can indicate potential supply chain health or sentiment shifts.
+    """
+    for supplier_ticker in supplier_tickers:
+        df[f'{target_ticker}_vs_{supplier_ticker}_CloseRatio'] = df[f'Close_{target_ticker}'] / df[f'Close_{supplier_ticker}']
+    return df
+
+def add_volatility_ratios(df, stock_ticker, benchmark_ticker='^GSPC'):
+    """
+    Calculates the ratio of a stock's volatility (ATR) to the benchmark's volatility.
+    A high ratio indicates the stock is more volatile than the market.
+    """
+    # Calculate volatility ratio as the ratio of their ATRs
+    df[f'{stock_ticker}_vs_{benchmark_ticker}_ATR_Ratio'] = df[f'{stock_ticker}_ATR14'] / df[f'{benchmark_ticker}_ATR14']
+    return df
+
+def add_volume_ratios(df, stock_ticker, benchmark_ticker='^GSPC'):
+    """
+    Calculates the ratio of a stock's volume to a benchmark's volume.
+    High values can indicate unusual trading interest in a specific stock.
+    """
+    # Assuming the volume column names are like 'Volume_WMT' and 'Volume_^GSPC'
+    df[f'{stock_ticker}_vs_{benchmark_ticker}_VolumeRatio'] = df[f'Volume_{stock_ticker}'] / df[f'Volume_{benchmark_ticker}']
+    return df
+
+def add_volume_volatility_interaction(df, stock_ticker):
+    """
+    Creates a feature that combines volume and volatility.
+    High values can signal high-conviction moves (large volume on volatile days).
+    We use the ATR as a measure of volatility.
+    """
+    df[f'{stock_ticker}_Volume_x_ATR'] = df[f'Volume_{stock_ticker}'] * df[f'{stock_ticker}_ATR14']
+    return df
+
+def add_cross_stock_lagged_correlations(df, target_ticker, source_ticker, window=5):
+    """
+    Calculates the rolling correlation between the daily returns of two stocks.
+    This directly tests the hypothesis that a supplier's movement might predict a retailer's movement.
+    """
+    # Calculate daily returns for both stocks
+    target_returns = df[f'Close_{target_ticker}_daily_return']
+    source_returns = df[f'Close_{source_ticker}_daily_return']
+
+    # Calculate a rolling correlation between the two returns
+    df[f'{target_ticker}_vs_{source_ticker}_RollingCorr_{window}D'] = target_returns.rolling(window=window).corr(source_returns)
+
+    return df
+
+import pandas as pd
+import numpy as np
+
 def prepare_data_for_ml(tickers, start_date, end_date, output_raw_csv=None, output_engineered_csv="engineered_stock_data.csv"):
     """
     Orchestrates the data fetching and feature engineering pipeline.
@@ -522,7 +697,6 @@ def prepare_data_for_ml(tickers, start_date, end_date, output_raw_csv=None, outp
     print("\n--- Starting Data Preparation Pipeline ---")
 
     # 1. Fetch raw historical data for multiple stocks
-    # This must be the first step to create the 'df' variable
     df = fetch_multiple_stock_data(tickers, start_date, end_date, output_filename=output_raw_csv)
     if df.empty:
         print("Pipeline stopped: No data fetched or data is empty after initial processing.")
@@ -538,52 +712,51 @@ def prepare_data_for_ml(tickers, start_date, end_date, output_raw_csv=None, outp
         
         # Price Range Features (needs High, Low, Open, Close)
         df = add_price_range_features(df, prefix)
-
         # True Range (needs High, Low, Close) - Required for ATR and ADX
         df = calculate_true_range(df, prefix)
-
         # ATR (needs True Range)
         df = calculate_atr(df, prefix, window=14)
-
         # Volume Features (needs Volume)
         df = add_volume_features(df, prefix, window=20)
-
         # OBV (needs Close, Volume)
         df = calculate_obv(df, prefix)
-
         # RSI (needs Close)
         df = calculate_rsi(df, prefix, window=14)
-
         # MACD (needs Close)
         df = calculate_macd(df, prefix, fast_period=12, slow_period=26, signal_period=9)
-
         # Moving Averages (needs Close)
         df = add_moving_averages(df, prefix, window_sizes=[10, 20, 50], ma_type='SMA')
         df = add_moving_averages(df, prefix, window_sizes=[12, 26], ma_type='EMA')
-
         # Bollinger Bands (needs Close)
         df = add_bollinger_bands(df, prefix, window=20, num_std=2)
-
         # Stochastic Oscillator (needs High, Low, Close)
         df = calculate_stochastic_oscillator(df, prefix, k_period=14, d_period=3)
-
         # ADX (needs High, Low, Close, and True Range)
         df = calculate_adx(df, prefix, window=14)
     
     # 3. Apply features that depend on all stocks or can be applied once
-    # This must happen OUTSIDE the loop for efficiency and correctness.
-    
     print("\nApplying general features and targets...")
     
-    # Get a list of all 'Close' columns
+    # Get a list of all 'Close' columns for daily return calculations
     close_cols_for_returns = [col for col in df.columns if col.startswith('Close_')]
-    
-    # Daily Returns (needs all Close columns)
     df = calculate_daily_returns(df, close_cols_for_returns)
 
-    # Next Day Targets (depends on daily returns)
-    df = create_next_day_targets(df, close_cols_for_returns)
-
+    # --- ADDING CUSTOM FEATURES HERE ---
+    target_ticker = 'WMT'
+    supplier_tickers = ['KO', 'PEP']
+    benchmark_ticker = '^GSPC'
+    
+    if benchmark_ticker in tickers: # Check if benchmark data was fetched
+        df = add_relative_strength(df, target_ticker, benchmark_ticker)
+        df = add_volatility_ratios(df, target_ticker, benchmark_ticker)
+        df = add_volume_ratios(df, target_ticker, benchmark_ticker)
+        
+    df = add_interstock_ratios(df, target_ticker, supplier_tickers)
+    df = add_volume_volatility_interaction(df, target_ticker)
+    for supplier in supplier_tickers:
+        df = add_cross_stock_lagged_correlations(df, target_ticker, supplier)
+    # --- END OF CUSTOM FEATURES ---
+    
     # Lagged Features (needs features that are already created)
     features_to_lag = []
     for prefix in stock_prefixes:
@@ -611,4 +784,30 @@ def prepare_data_for_ml(tickers, start_date, end_date, output_raw_csv=None, outp
     df.to_csv(output_engineered_csv)
     print(f"Final engineered data saved to {output_engineered_csv}")
     
+    return df
+
+def create_target_variable(df, ticker, window=1, threshold=0):
+    """
+    Creates a target variable based on the cumulative return over a specified window.
+    This function is designed to be called outside the main pipeline for tuning.
+
+    Parameters:
+    df (pd.DataFrame): The DataFrame with Close prices.
+    ticker (str): The stock ticker for the target.
+    window (int): The number of days for the return period (e.g., 1 for next day, 5 for a week).
+    threshold (float): The minimum return to be considered "up".
+
+    Returns:
+    pd.DataFrame: A DataFrame with the new target and target return columns.
+    """
+    close_col = f'Close_{ticker}'
+    target_return_col = f'{ticker}_target_return_{window}D_{threshold}'
+    target_col = f'{ticker}_Target'
+
+    # Calculate cumulative return over the window
+    df[target_return_col] = df[close_col].pct_change(periods=window).shift(-window)
+
+    # Create the binary target
+    df[target_col] = (df[target_return_col] > threshold).astype(int)
+
     return df
