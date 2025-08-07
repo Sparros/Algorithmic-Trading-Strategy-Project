@@ -1,2 +1,4 @@
 /venv/
 /Theory 1/
+config.py
+.gitignore

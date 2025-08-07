@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from src.stock_data import fetch_single_stock_data, fetch_multiple_stock_data
+from src.stock_data import fetch_multiple_stock_data
 
 def calculate_daily_returns(df_input, cols_to_process=['Close']):
     """
@@ -505,114 +505,6 @@ def add_time_based_features(df_input):
         print("    Warning: DataFrame index is not a DatetimeIndex. Skipping time-based features.")
     return df
 
-# def prepare_data_for_ml(tickers, start_date, end_date, output_raw_csv=None, output_engineered_csv="engineered_stock_data.csv"):
-#     """
-#     Orchestrates the data fetching and feature engineering pipeline.
-
-#     Parameters:
-#     tickers (list): List of stock ticker symbols.
-#     start_date (str): Start date for data fetching.
-#     end_date (str): End date for data fetching.
-#     output_raw_csv (str, optional): Filename to save the raw combined data.
-#     output_engineered_csv (str, optional): Filename to save the final engineered data.
-
-#     Returns:
-#     pd.DataFrame: A DataFrame with all engineered features and target variables.
-#     """
-#     print("\n--- Starting Data Preparation Pipeline ---")
-
-#     # 1. Fetch raw historical data for multiple stocks
-#     # This must be the first step to create the 'df' variable
-#     df = fetch_multiple_stock_data(tickers, start_date, end_date, output_filename=output_raw_csv)
-#     if df.empty:
-#         print("Pipeline stopped: No data fetched or data is empty after initial processing.")
-#         return pd.DataFrame()
-
-#     # Get a list of the ticker prefixes for iteration (e.g., 'AAPL', 'MSFT')
-#     stock_prefixes = sorted(list(set([col.split('_')[1] for col in df.columns if '_' in col])))
-#     print(f"\nDiscovered stock prefixes: {stock_prefixes}")
-
-#     # 2. Apply stock-specific features inside the loop
-#     for prefix in stock_prefixes:
-#         print(f"\nProcessing features for stock prefix: {prefix}")
-        
-#         # Price Range Features (needs High, Low, Open, Close)
-#         df = add_price_range_features(df, prefix)
-
-#         # True Range (needs High, Low, Close) - Required for ATR and ADX
-#         df = calculate_true_range(df, prefix)
-
-#         # ATR (needs True Range)
-#         df = calculate_atr(df, prefix, window=14)
-
-#         # Volume Features (needs Volume)
-#         df = add_volume_features(df, prefix, window=20)
-
-#         # OBV (needs Close, Volume)
-#         df = calculate_obv(df, prefix)
-
-#         # RSI (needs Close)
-#         df = calculate_rsi(df, prefix, window=14)
-
-#         # MACD (needs Close)
-#         df = calculate_macd(df, prefix, fast_period=12, slow_period=26, signal_period=9)
-
-#         # Moving Averages (needs Close)
-#         df = add_moving_averages(df, prefix, window_sizes=[10, 20, 50], ma_type='SMA')
-#         df = add_moving_averages(df, prefix, window_sizes=[12, 26], ma_type='EMA')
-
-#         # Bollinger Bands (needs Close)
-#         df = add_bollinger_bands(df, prefix, window=20, num_std=2)
-
-#         # Stochastic Oscillator (needs High, Low, Close)
-#         df = calculate_stochastic_oscillator(df, prefix, k_period=14, d_period=3)
-
-#         # ADX (needs High, Low, Close, and True Range)
-#         df = calculate_adx(df, prefix, window=14)
-    
-#     # 3. Apply features that depend on all stocks or can be applied once
-#     # This must happen OUTSIDE the loop for efficiency and correctness.
-    
-#     print("\nApplying general features and targets...")
-    
-#     # Get a list of all 'Close' columns
-#     close_cols_for_returns = [col for col in df.columns if col.startswith('Close_')]
-    
-#     # Daily Returns (needs all Close columns)
-#     df = calculate_daily_returns(df, close_cols_for_returns)
-
-#     # Next Day Targets (depends on daily returns)
-#     df = create_next_day_targets(df, close_cols_for_returns)
-
-#     # Lagged Features (needs features that are already created)
-#     features_to_lag = []
-#     for prefix in stock_prefixes:
-#         features_to_lag.extend([
-#             f'Close_{prefix}',
-#             f'Close_{prefix}_daily_return',
-#             f'{prefix}_RSI14',
-#             f'{prefix}_Volume_MA_Ratio'
-#         ])
-#     lag_periods = [1, 3, 5]
-#     df = add_lagged_features(df, features_to_lag, lag_periods)
-
-#     # Time-based Features (general)
-#     #df = add_time_based_features(df)
-
-#     # 4. Final Data Cleanup
-#     initial_rows = len(df)
-#     df.dropna(inplace=True)
-#     rows_dropped = initial_rows - len(df)
-#     print(f"\nDropped {rows_dropped} rows due to NaN values after feature engineering.")
-
-#     print("\n--- Data Preparation Complete ---")
-    
-#     # 5. Save the final DataFrame
-#     df.to_csv(output_engineered_csv)
-#     print(f"Final engineered data saved to {output_engineered_csv}")
-    
-#     return df
-
 def add_relative_strength(df, stock_ticker, benchmark_ticker='^GSPC'):
     """
     Calculates the relative strength of a stock against a benchmark index.
@@ -676,9 +568,6 @@ def add_cross_stock_lagged_correlations(df, target_ticker, source_ticker, window
     df[f'{target_ticker}_vs_{source_ticker}_RollingCorr_{window}D'] = target_returns.rolling(window=window).corr(source_returns)
 
     return df
-
-import pandas as pd
-import numpy as np
 
 def prepare_data_for_ml(tickers, start_date, end_date, output_raw_csv=None, output_engineered_csv="engineered_stock_data.csv"):
     """
