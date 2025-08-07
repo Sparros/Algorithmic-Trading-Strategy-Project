@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from stock_data import fetch_single_stock_data, fetch_multiple_stock_data
+from src.stock_data import fetch_single_stock_data, fetch_multiple_stock_data
 
 def calculate_daily_returns(df_input, cols_to_process=['Close']):
     """

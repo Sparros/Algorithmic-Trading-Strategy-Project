@@ -1,0 +1,46 @@
+--- Final Experiment Results Summary ---
+                 Model  Window  Threshold  Test_F1_1  Test_Recall_1  Test_Precision_1
+0             CatBoost       7      0.015   0.512195       0.640244          0.426829
+1              XGBoost       5      0.010   0.469767       0.543011          0.413934
+2              XGBoost       7      0.015   0.465686       0.579268          0.389344
+3             CatBoost       5      0.010   0.461538       0.500000          0.428571
+4             CatBoost      10      0.020   0.444444       0.525641          0.384977
+5              XGBoost      10      0.020   0.434109       0.538462          0.363636
+6         RandomForest       7      0.015   0.419263       0.451220          0.391534
+7              XGBoost       3      0.005   0.417476       0.417476          0.417476
+8             CatBoost       3      0.005   0.387097       0.378641          0.395939
+9         RandomForest       3      0.005   0.379679       0.344660          0.422619
+10        RandomForest      10      0.020   0.376543       0.391026          0.363095
+11        RandomForest       5      0.010   0.368421       0.338710          0.403846
+12  LogisticRegression       5      0.010   0.364146       0.349462          0.380117
+13  LogisticRegression      10      0.020   0.353659       0.371795          0.337209
+14  LogisticRegression       3      0.005   0.262069       0.184466          0.452381
+15  LogisticRegression       7      0.015   0.146789       0.097561          0.296296
+
+XGBOOST:
+Best parameters found:  {'learning_rate': 0.07, 'max_depth': 4, 'n_estimators': 250, 'subsample': 0.6}
+Best cross-validation score: 0.36
+
+--- Tuned XGBoost Model Evaluation on Test Data ---
+              precision    recall  f1-score   support
+
+           0       0.66      0.59      0.62       317
+           1       0.40      0.47      0.44       186
+
+    accuracy                           0.55       503
+   macro avg       0.53      0.53      0.53       503
+weighted avg       0.56      0.55      0.55       503
+
+CATBOOST:
+Best parameters found:  {'depth': 7, 'iterations': 200, 'learning_rate': 0.2}
+Best cross-validation score: 0.37
+
+--- Tuned CatBoost Model Evaluation on Test Data ---
+              precision    recall  f1-score   support
+
+           0       0.67      0.68      0.67       317
+           1       0.44      0.42      0.43       186
+
+    accuracy                           0.58       503
+   macro avg       0.55      0.55      0.55       503
+weighted avg       0.58      0.58      0.58       503
