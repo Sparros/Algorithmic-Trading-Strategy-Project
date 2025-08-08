@@ -2,11 +2,13 @@ import requests
 import pandas as pd
 import time
 import os
-import pytrends
+from pytrends.request import TrendReq
 from typing import List, Optional
 
-# Your Alpha Vantage API key
-from config import Alpha_Vantage_Access_Key as ALPHA_API_KEY
+# Import API keys
+from src.config import ALPHA_ACCESS_KEY as ALPHA_API_KEY
+from src.config import FRED_API_KEY
+
 
 def fetch_general_macro_data(function_name: str, interval: Optional[str] = 'monthly') -> pd.DataFrame:
     """
@@ -85,25 +87,40 @@ def fetch_fundamental_data(function_name: str, symbol: str) -> pd.DataFrame:
 
 
 # compute derived fundamental metrics (e.g., EPS, P/E ratio, debt-to-equity) from the raw data fetched by fetch_fundamental_data
-def fundamental_metrics(df: pd.DataFrame) -> pd.DataFrame:
+def fundamental_metrics(df) -> pd.DataFrame:
     """
-    Computes derived fundamental metrics from the raw data.
+    Computes derived fundamental metrics from raw financial statement data.
 
     Args:
-        df (pd.DataFrame): The DataFrame containing fundamental data.
+        df (pd.DataFrame): A DataFrame containing raw financial statement data.
 
     Returns:
-        pd.DataFrame: A DataFrame with derived metrics.
+        pd.DataFrame: A DataFrame with the raw data and new calculated metrics.
     """
     if df.empty:
         return pd.DataFrame()
 
-    # Example calculations
-    df['eps'] = df['netIncome'] / df['weightedAverageSharesOutstanding']
-    df['pe_ratio'] = df['totalRevenue'] / df['eps']
-    df['debt_to_equity'] = df['totalDebt'] / df['totalEquity']
+    # Create a copy to avoid SettingWithCopyWarning
+    df = df.copy()
 
-    return df[['eps', 'pe_ratio', 'debt_to_equity']]
+    # Check for required columns and compute metrics only if they exist
+    if 'netIncome' in df.columns and 'weightedAverageSharesOutstanding' in df.columns:
+        df['eps'] = df['netIncome'] / df['weightedAverageSharesOutstanding']
+    else:
+        # If columns are missing, fill the new column with NaN
+        df['eps'] = float('nan')
+
+    if 'totalRevenue' in df.columns and 'eps' in df.columns and 'eps' in df.columns and not df['eps'].isnull().all():
+        df['pe_ratio'] = df['totalRevenue'] / df['eps']
+    else:
+        df['pe_ratio'] = float('nan')
+
+    if 'totalDebt' in df.columns and 'totalEquity' in df.columns:
+        df['debt_to_equity'] = df['totalDebt'] / df['totalEquity']
+    else:
+        df['debt_to_equity'] = float('nan')
+
+    return df
 
 def fetch_news_sentiment(
     symbol: Optional[str] = None, 
@@ -124,10 +141,7 @@ def fetch_news_sentiment(
 
     Returns:
         pd.DataFrame: A DataFrame with daily aggregated sentiment scores.
-    """    
-    if ALPHA_API_KEY == "YOUR_ALPHA_API_KEY_HERE":
-        raise ValueError("Please replace 'YOUR_ALPHA_API_KEY_HERE' with your actual Alpha Vantage API key.")
-    
+    """
     url = "https://www.alphavantage.co/query?"
     params = {
         'function': 'NEWS_SENTIMENT',
@@ -163,49 +177,75 @@ def fetch_news_sentiment(
     news_df['overall_sentiment_score'] = news_df['overall_sentiment_score'].astype(float)
     news_df['overall_sentiment_label'] = news_df['overall_sentiment_label'].astype('category')
     
-    # Resample to daily and aggregate scores
-    daily_sentiment = news_df.resample('D').agg({
-        'overall_sentiment_score': 'mean',
-        'overall_sentiment_label': lambda x: x.mode()[0] if not x.mode().empty else None,
-        'ticker_sentiment_score_WMT': 'mean' # Example for a specific ticker
-    })
+    # DYNAMIC LOGIC FOR TICKER-SPECIFIC SENTIMENT
+    if symbol:
+        # Create a dynamic column name based on the input symbol
+        dynamic_score_col = f'{symbol}_ticker_sentiment_score'
+        
+        # Use a list comprehension to extract the specific ticker's sentiment score
+        # This will return a list of scores or NaN if the ticker is not found
+        def get_ticker_score(sentiments):
+            for item in sentiments:
+                if item.get('ticker') == symbol:
+                    return float(item.get('ticker_sentiment_score', float('nan')))
+            return float('nan')
+        
+        news_df[dynamic_score_col] = news_df['ticker_sentiment'].apply(get_ticker_score)
+        
+        # Aggregate daily scores using the new dynamic column name
+        daily_sentiment = news_df.resample('D').agg({
+            'overall_sentiment_score': 'mean',
+            'overall_sentiment_label': lambda x: x.mode()[0] if not x.mode().empty else None,
+            dynamic_score_col: 'mean'
+        })
+    else:
+        # If no symbol is provided, just aggregate the overall sentiment
+        daily_sentiment = news_df.resample('D').agg({
+            'overall_sentiment_score': 'mean',
+            'overall_sentiment_label': lambda x: x.mode()[0] if not x.mode().empty else None,
+        })
     
     # Rename columns to be specific and avoid conflicts
     daily_sentiment = daily_sentiment.rename(columns=lambda col: f'news_{col}')
     
     return daily_sentiment
 
-def fetch_fred_data(series_id: str, start_date: str = '1980-01-01') -> pd.DataFrame:
+def fetch_fred_data(series_id: str, start_date: str = None) -> pd.DataFrame:
     """
-    Fetches macroeconomic data from the FRED API.
-
+    Fetches macroeconomic data from the FRED API for a single series ID.
+    
     Args:
-        series_id (str): The FRED series ID for the data (e.g., 'PAYEMS' for Non-farm Payrolls).
-        start_date (str): The start date for the data (YYYY-MM-DD).
-
+        series_id (str): The FRED series ID for the data (e.g., 'PAYEMS').
+        start_date (str, optional): The start date for the data (YYYY-MM-DD). 
+                                    Defaults to None, which fetches all available data.
+    
     Returns:
-        pd.DataFrame: A DataFrame with the date as the index and the value as a column.
+        pd.DataFrame: A DataFrame with the date as the index and the value as a column,
+                      or an empty DataFrame if no data is found.
     """
-  
-    url = f"https://api.stlouisfed.org/fred/series/observations"
+    url = f"https://api.stlouisfed.org/fred/series/observations" 
+    
     params = {
         'series_id': series_id,
         'api_key': FRED_API_KEY,
-        'file_type': 'json',
-        'observation_start': start_date
+        'file_type': 'json'
     }
+
+    # Conditionally add the observation_start parameter if a start_date is provided
+    if start_date:
+        params['observation_start'] = start_date
     
     try:
         response = requests.get(url, params=params)
-        response.raise_for_status()
+        response.raise_for_status() 
         data = response.json()
     except requests.exceptions.RequestException as e:
         print(f"Error fetching data from FRED for {series_id}: {e}")
-        return pd.DataFrame()
+        return pd.DataFrame() 
         
     if 'observations' not in data:
         print(f"No observations found for FRED series ID: {series_id}")
-        return pd.DataFrame()
+        return pd.DataFrame() 
 
     df = pd.DataFrame(data['observations'])
     df = df[['date', 'value']]
@@ -213,6 +253,8 @@ def fetch_fred_data(series_id: str, start_date: str = '1980-01-01') -> pd.DataFr
     df.set_index('date', inplace=True)
     df.rename(columns={'value': series_id}, inplace=True)
     df[series_id] = pd.to_numeric(df[series_id], errors='coerce')
+    
+    return df
 
 def fetch_google_trends(
     keywords: List[str], 
@@ -261,26 +303,38 @@ def fetch_macro_data_orchestrator(
     fundamental_funcs: List[str],
     fred_series_ids: List[str],
     target_ticker: str,
-    monthly_interval: str,
     google_trends_keywords: Optional[List[str]] = None,
+    monthly_interval: str = 'monthly',
     output_filename: Optional[str] = None,
     output_directory: str = "data/processed"
 ) -> pd.DataFrame:
     """
-    Orchestrates fetching of external macro and fundamental data,
-    and returns a single merged DataFrame.
+    Orchestrates the fetching and merging of diverse external data sources.
+
+    This function collects macroeconomic data from Alpha Vantage and FRED, company fundamental
+    data from Alpha Vantage, and web search trends from Google Trends. It merges all
+    these data points into a single, comprehensive DataFrame, with all time series
+    resampled to a daily frequency for consistency.
 
     Args:
-        general_macro_funcs (List[str]): List of general macro function names.
-        fundamental_funcs (List[str]): List of fundamental function names for the target ticker.
-        target_ticker (str): The stock ticker to fetch fundamental data for.
-        monthly_interval (str): The interval for monthly macro data (e.g., 'monthly', 'quarterly').
-        output_filename (Optional[str]): The filename to save the final merged CSV.
-                                        If None, the file is not saved.
-        output_directory (str): The directory to save the output file.
+        general_macro_funcs (List[str]): A list of macroeconomic function names to fetch from Alpha Vantage
+            (e.g., ['CPI', 'FEDERAL_FUNDS_RATE']).
+        fundamental_funcs (List[str]): A list of financial statement function names to fetch for the
+            target ticker from Alpha Vantage (e.g., ['INCOME_STATEMENT', 'BALANCE_SHEET']).
+        fred_series_ids (List[str]): A list of FRED series IDs to fetch macroeconomic data from the
+            St. Louis Fed (e.g., ['PAYEMS', 'UMCSENT']).
+        target_ticker (str): The stock ticker symbol for which to fetch fundamental data.
+        google_trends_keywords (Optional[List[str]]): A list of keywords to fetch search interest data
+            for from Google Trends. Set to `None` to skip this step.
+        monthly_interval (str): The time interval for Alpha Vantage macroeconomic data
+            (e.g., 'monthly', 'quarterly').
+        output_filename (Optional[str]): The filename to save the final merged CSV. If `None`,
+            the DataFrame will not be saved.
+        output_directory (str): The directory where the output file will be saved.
 
     Returns:
-        pd.DataFrame: A single DataFrame with all external data merged, with a daily frequency.
+        pd.DataFrame: A single DataFrame containing all the merged external data,
+        resampled to a daily frequency and ready for modeling.
     """
     print("\n--- Starting External Data Orchestration ---")
     
@@ -288,6 +342,7 @@ def fetch_macro_data_orchestrator(
 
     # 1. Fetch and process general macroeconomic data
     for func_name in general_macro_funcs:
+        print(f"Fetching general macroeconomic data for: {func_name}")
         df = fetch_general_macro_data(func_name, interval=monthly_interval)
         if not df.empty:
             df = df.asfreq('D').ffill()
@@ -295,10 +350,10 @@ def fetch_macro_data_orchestrator(
                 all_external_data = df
             else:
                 all_external_data = all_external_data.merge(df, left_index=True, right_index=True, how='outer')
-        time.sleep(15)
 
     # 2. Fetch and process fundamental data for the target ticker
     for func_name in fundamental_funcs:
+        print(f"Fetching fundamental data for: {func_name} ({target_ticker})")
         raw_fundamental_df  = fetch_fundamental_data(func_name, symbol=target_ticker)
         
         # Check if the fetched data is for Income Statement or Balance Sheet
@@ -317,7 +372,6 @@ def fetch_macro_data_orchestrator(
                 all_external_data = processed_fundamental_df
             else:
                 all_external_data = all_external_data.merge(processed_fundamental_df, left_index=True, right_index=True, how='outer')
-        time.sleep(15)
 
     # 3. Fetch and process data from FRED
     for series_id in fred_series_ids:
@@ -329,7 +383,6 @@ def fetch_macro_data_orchestrator(
                 all_external_data = fred_df
             else:
                 all_external_data = all_external_data.merge(fred_df, left_index=True, right_index=True, how='outer')
-        time.sleep(5) # Be mindful of API rate limits
     
     # 4. Fetch and process Google Trends data
     if google_trends_keywords:
@@ -345,13 +398,6 @@ def fetch_macro_data_orchestrator(
             else:
                 all_external_data = all_external_data.merge(trends_df, left_index=True, right_index=True, how='outer')
 
-    
-    # Final cleanup
-    if not all_external_data.empty:
-        all_external_data.ffill(inplace=True)
-        # Drop rows with any remaining NaNs
-        all_external_data.dropna(inplace=True)
-
     print("--- External Data Orchestration Complete ---")
 
     # Save the DataFrame to a CSV if a filename is provided
@@ -364,4 +410,3 @@ def fetch_macro_data_orchestrator(
         print(f"External data saved to {full_path}")
         
     return all_external_data
-    return df
