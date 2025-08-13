@@ -1,4 +1,4 @@
---- Final Experiment Results Summary ---
+--- Final Experiment Results with Stock Only Data Summary ---
                  Model  Window  Threshold  Test_F1_1  Test_Recall_1  Test_Precision_1
 0             CatBoost       7      0.015   0.512195       0.640244          0.426829
 1              XGBoost       5      0.010   0.469767       0.543011          0.413934
@@ -16,6 +16,27 @@
 13  LogisticRegression      10      0.020   0.353659       0.371795          0.337209
 14  LogisticRegression       3      0.005   0.262069       0.184466          0.452381
 15  LogisticRegression       7      0.015   0.146789       0.097561          0.296296
+
+
+
+--- Final Experiment Results Summary ---
+                 Model  Window  Threshold  Test_Accuracy  Test_Precision_1  Test_Recall_1  Test_F1_1                                                                                          Best_Params
+0   LogisticRegression      10      0.005       0.548708          0.517467       0.975309   0.676177                                                                    {'C': 0.1, 'solver': 'liblinear'}
+1   LogisticRegression      10      0.010       0.491054          0.454348       0.976636   0.620178                                                                    {'C': 1.0, 'solver': 'liblinear'}
+2   LogisticRegression       5      0.005       0.497018          0.465596       0.910314   0.616085                                                                    {'C': 1.0, 'solver': 'liblinear'}
+3              XGBoost      10      0.005       0.574553          0.560166       0.555556   0.557851  {'learning_rate': 0.1, 'max_depth': 3, 'n_estimators': 100, 'scale_pos_weight': 0.9681620839363242}
+4   LogisticRegression       5      0.010       0.415507          0.386555       0.989247   0.555891                                                                   {'C': 10.0, 'solver': 'liblinear'}
+5             CatBoost      10      0.010       0.560636          0.487085       0.616822   0.544330      {'depth': 3, 'learning_rate': 0.1, 'n_estimators': 100, 'scale_pos_weight': 1.3011844331641287}
+6         RandomForest      10      0.005       0.528827          0.512500       0.506173   0.509317                                                                {'max_depth': 5, 'n_estimators': 100}
+7         RandomForest      10      0.010       0.572565          0.497674       0.500000   0.498834                                                                {'max_depth': 5, 'n_estimators': 200}
+8              XGBoost      10      0.010       0.566600          0.490654       0.490654   0.490654  {'learning_rate': 0.1, 'max_depth': 3, 'n_estimators': 100, 'scale_pos_weight': 1.3011844331641287}
+9             CatBoost       5      0.005       0.528827          0.468468       0.466368   0.467416      {'depth': 3, 'learning_rate': 0.1, 'n_estimators': 100, 'scale_pos_weight': 1.2077922077922079}
+10            CatBoost       5      0.010       0.556660          0.417040       0.500000   0.454768      {'depth': 3, 'learning_rate': 0.1, 'n_estimators': 100, 'scale_pos_weight': 1.8783068783068784}
+11             XGBoost       5      0.005       0.544732          0.484694       0.426009   0.453461  {'learning_rate': 0.1, 'max_depth': 3, 'n_estimators': 100, 'scale_pos_weight': 1.2077922077922079}
+12        RandomForest       5      0.005       0.532803          0.470874       0.434978   0.452214                                                                {'max_depth': 5, 'n_estimators': 100}
+13        RandomForest       5      0.010       0.578529          0.435000       0.467742   0.450777                                                                {'max_depth': 5, 'n_estimators': 100}
+14             XGBoost       5      0.010       0.566600          0.423810       0.478495   0.449495  {'learning_rate': 0.1, 'max_depth': 3, 'n_estimators': 100, 'scale_pos_weight': 1.8783068783068784}
+15            CatBoost      10      0.005       0.526839          0.514451       0.366255   0.427885      {'depth': 3, 'learning_rate': 0.1, 'n_estimators': 100, 'scale_pos_weight': 0.9681620839363242}
 
 XGBOOST:
 Best parameters found:  {'learning_rate': 0.07, 'max_depth': 4, 'n_estimators': 250, 'subsample': 0.6}

@@ -2,3 +2,11 @@
 /Theory 1/
 config.py
 .gitignore
+/data/
+    /raw/
+    /processed/
+/models/
+/notebooks/
+    /catboost_info/
+    testing.ipynb
+/catboost_info/
