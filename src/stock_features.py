@@ -700,3 +700,4 @@ def create_target_variable(df, ticker, window=1, threshold=0):
     df[target_col] = (df[target_return_col] > threshold).astype(int)
 
     return df
+

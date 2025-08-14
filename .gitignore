@@ -6,7 +6,6 @@ config.py
     /raw/
     /processed/
 /models/
-/notebooks/
-    /catboost_info/
-    testing.ipynb
+
 /catboost_info/
+notebooks/catboost_info/
