@@ -1,11 +1,9 @@
-/venv/
-/Theory 1/
-config.py
 .gitignore
-/data/
-    /raw/
-    /processed/
-/models/
 
+/.pytest_cache
 /catboost_info/
-notebooks/catboost_info/
+/data/
+/models/
+/notebooks/
+    /catboost_info/
+src/config.py
