@@ -8,3 +8,7 @@ pandas-datareader==0.10.0
 requests==2.31.0
 pytrends==4.9.2
 pytest==8.4.1
+pykalman==0.10.1
+backtesting=0.6.5 
+bokeh=3.7.3 
+xyzservices=2025.4.0

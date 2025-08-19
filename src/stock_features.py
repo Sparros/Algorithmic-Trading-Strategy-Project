@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from pykalman import KalmanFilter
 from src.stock_data import fetch_multiple_stock_data
 
 def calculate_daily_returns(df_input, cols_to_process=['Close']):
@@ -569,7 +570,7 @@ def add_cross_stock_lagged_correlations(df, target_ticker, source_ticker, window
 
     return df
 
-def prepare_data_for_ml(tickers, start_date, end_date, output_raw_csv=None, output_engineered_csv="engineered_stock_data.csv"):
+def prepare_data_for_ml(tickers, start_date, end_date, output_raw_csv=None, output_engineered_csv=None):
     """
     Orchestrates the data fetching and feature engineering pipeline.
 
@@ -670,8 +671,9 @@ def prepare_data_for_ml(tickers, start_date, end_date, output_raw_csv=None, outp
     print("\n--- Data Preparation Complete ---")
     
     # 5. Save the final DataFrame
-    df.to_csv(output_engineered_csv)
-    print(f"Final engineered data saved to {output_engineered_csv}")
+    if output_engineered_csv:
+        df.to_csv(output_engineered_csv)
+        print(f"Final engineered data saved to {output_engineered_csv}")
     
     return df
 
@@ -689,15 +691,46 @@ def create_target_variable(df, ticker, window=1, threshold=0):
     Returns:
     pd.DataFrame: A DataFrame with the new target and target return columns.
     """
-    close_col = f'Close_{ticker}'
-    target_return_col = f'{ticker}_target_return_{window}D_{threshold}'
-    target_col = f'{ticker}_Target'
-
-    # Calculate cumulative return over the window
-    df[target_return_col] = df[close_col].pct_change(periods=window).shift(-window)
-
-    # Create the binary target
-    df[target_col] = (df[target_return_col] > threshold).astype(int)
-
+    target_return_col_name = f'{ticker}_target_return_{window}D_{threshold}'
+    df[target_return_col_name] = df[f'Close_{ticker}'].pct_change(periods=window).shift(-window)
+    df[f'{ticker}_Target'] = (df[target_return_col_name] > threshold).astype(int)
     return df
 
+def apply_kalman_filter_with_lag(data_df, target_tickers, lags):
+    """
+    Applies a Kalman filter to specified stock tickers and adds lagged,
+    filtered prices as new columns to the DataFrame to prevent data leakage.
+    
+    Args:
+        data_df (pd.DataFrame): The input DataFrame containing stock data.
+        target_tickers (list of str): A list of stock tickers to filter.
+        lags (list of int): A list of lag periods to create for the new features.
+    
+    Returns:
+        pd.DataFrame: The DataFrame with the new lagged, filtered columns added.
+    """
+    df_copy = data_df.copy()
+    
+    for ticker in target_tickers:
+        price_series = df_copy[f'Close_{ticker}']
+        measurements = np.asarray(price_series).reshape(-1, 1)
+
+        # Initialize and run the Kalman filter
+        kf = KalmanFilter(transition_matrices=[1],
+                          observation_matrices=[1],
+                          initial_state_mean=measurements[0],
+                          initial_state_covariance=1,
+                          observation_covariance=1,
+                          transition_covariance=0.01)
+
+        (filtered_state_means, filtered_state_covariances) = kf.filter(measurements)
+        filtered_prices = filtered_state_means.flatten()
+
+        # Add new lagged features for each specified lag
+        for lag in lags:
+            new_col_name = f'Kalman_Filtered_Close_{ticker}_lag_{lag}'
+            df_copy[new_col_name] = pd.Series(
+                filtered_prices, index=df_copy.index
+            ).shift(lag)
+            
+    return df_copy

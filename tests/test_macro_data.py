@@ -3,7 +3,7 @@ import pytest
 import pandas as pd
 from unittest.mock import patch, Mock
 
-from src.macro_data import fetch_fundamental_data, fundamental_metrics, fetch_macro_data_orchestrator
+from macro_features import fetch_fundamental_data, fundamental_metrics, fetch_macro_data_orchestrator
 
 @pytest.fixture
 def mock_income_statement_response():

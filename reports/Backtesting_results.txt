@@ -1,0 +1,96 @@
+--- Backtesting Results (with Real-World Costs & Continuous Allocation) ---
+Starting Balance: $10000.00
+
+--- Buy-and-Hold Diagnostic ---
+Buy-and-Hold Start Date: 2021-01-04
+Buy Price (Initial Price): $45.83
+Buy-and-Hold End Date: 2022-12-30
+Sell Price (Final Price): $45.77
+Shares purchased: 218
+Remaining initial cash: $8.11
+Final Buy-and-Hold Balance: $9984.94
+Buy-and-Hold Total Return: -0.15%
+
+--- Strategy Results ---
+Final Strategy Balance: $9573.29
+Strategy Total Return: -4.27%
+Strategy Annualized Return: -2.20%
+Total Buy Trades: 52
+Total Sell Trades: 42
+Total Trades: 94
+
+--- Diagnostic: Model Signals ---
+Total Buy Signals (Prediction=1): 209
+Total Sell Signals (Prediction=0): 284
+
+--- Overall Performance ---
+Buy-and-Hold Annualized Return: -0.08%
+
+--- Top 10 Most Important Features ---
+WMT_Volume_MA_20D       0.016778
+DGS10                   0.016770
+KO_BB_Middle20          0.014906
+WMT_vs_KO_CloseRatio    0.013716
+COST_Volume_MA_20D      0.012507
+^GSPC_MACD_Hist         0.011986
+COST_MACD_Signal        0.011151
+PG_SMA_20               0.011059
+WMT_OBV                 0.010766
+PG_MACD_Line            0.010411
+
+
+--WITHOUT KALMAN FEATURE--
+
+--- Backtesting Results (with Real-World Costs & Continuous Allocation) ---
+Starting Balance: $10000.00
+
+--- Buy-and-Hold Diagnostic ---
+Buy-and-Hold Start Date: 2021-01-04
+Buy Price (Initial Price): $45.83
+Buy-and-Hold End Date: 2022-12-30
+Sell Price (Final Price): $45.77
+Shares purchased: 218
+Remaining initial cash: $8.11
+Final Buy-and-Hold Balance: $9984.94
+Buy-and-Hold Total Return: -0.15%
+
+--- Strategy Results ---
+Final Strategy Balance: $9573.29
+Strategy Total Return: -4.27%
+Strategy Annualized Return: -2.20%
+Total Buy Trades: 52
+Total Sell Trades: 42
+Total Trades: 94
+
+--- Diagnostic: Model Signals ---
+Total Buy Signals (Prediction=1): 209
+Total Sell Signals (Prediction=0): 284
+
+--- Overall Performance ---
+Buy-and-Hold Annualized Return: -0.08%
+
+--- Top 10 Most Important Features ---
+WMT_Volume_MA_20D       0.016778
+DGS10                   0.016770
+KO_BB_Middle20          0.014906
+WMT_vs_KO_CloseRatio    0.013716
+COST_Volume_MA_20D      0.012507
+^GSPC_MACD_Hist         0.011986
+COST_MACD_Signal        0.011151
+PG_SMA_20               0.011059
+WMT_OBV                 0.010766
+PG_MACD_Line            0.010411
+dtype: float64
+
+
+--- Strategy Results ---
+Final Strategy Balance: $10152.43
+Strategy Total Return: 1.52%
+Strategy Annualized Return: 0.78%
+Total Buy Trades: 53
+Total Sell Trades: 49
+Total Trades: 102
+
+--- Diagnostic: Model Signals ---
+Total Buy Signals (Prediction=1): 231
+Total Sell Signals (Prediction=0): 262
