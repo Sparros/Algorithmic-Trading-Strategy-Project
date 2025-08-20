@@ -33,7 +33,7 @@ In addition to market data, the pipeline now integrates crucial macroeconomic in
 
 ### B. Comprehensive Feature Engineering
 
-Once the raw data is ready, a robust set of features is engineered. These features are designed to capture different market dynamics—from momentum and trend to volatility and inter-asset relationships—which serve as inputs for the machine learning model.
+Once the raw data is ready, a robust set of features is engineered. These features are designed to capture different market dynamics, from momentum and trend to volatility and inter-asset relationships, which serve as inputs for the machine learning model.
 
 #### I. Technical & Statistical Indicators
 
@@ -74,7 +74,7 @@ Finally, the pipeline adds several simple yet informative features that can help
 
 #### Orchestration
 
-All these functions are combined and executed by the central `prepare_data_for_ml` and `macro_data_orchestrator` functions. These functions take care of the entire process—from fetching the raw data to saving the final engineered dataset—ensuring a reproducible and robust data pipeline for the subsequent modeling and backtesting stages.
+All these functions are combined and executed by the central `prepare_data_for_ml` and `macro_data_orchestrator` functions. These functions take care of the entire process, from fetching the raw data to saving the final engineered dataset, ensuring a reproducible and robust data pipeline for the subsequent modeling and backtesting stages.
 
 ## 2. Model Screening and Baseline Selection
 
