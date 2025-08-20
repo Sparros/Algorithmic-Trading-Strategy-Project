@@ -151,20 +151,4 @@ The `walk_forward_backtest` function orchestrates a series of backtests. For eac
 
 This process provides a much more realistic and trustworthy measure of your strategy's true performance.
 
----
 
-## Getting Started
-
-[Add installation instructions, dependencies, and usage examples here]
-
-## Results
-
-[Add your backtesting results, performance metrics, and visualizations here]
-
-## Contributing
-
-[Add contribution guidelines if applicable]
-
-## License
-
-[Add license information]
