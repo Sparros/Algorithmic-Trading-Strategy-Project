@@ -1,105 +1,77 @@
 import yfinance as yf
 import pandas as pd
-import numpy as np # For potential NaN handling if any data is missing
 
-def _format_yfinance_columns(df, ticker_suffix=None):
+def _format_ticker_data(df, ticker):
     """
-    Helper function to flatten and format yfinance columns.
-    Handles both single-ticker (flat columns) and multi-ticker (MultiIndex) outputs.
-    Drops 'Adj Close' columns.
+    Helper to format columns and remove 'Adj Close' for a single ticker DataFrame.
     """
-    if isinstance(df.columns, pd.MultiIndex):
-        # Case: Multi-ticker download -> MultiIndex columns (e.g., ('Close', 'AAPL'))
-        # Flatten to 'Category_Ticker' (e.g., 'Close_AAPL')
-        df.columns = ['_'.join(col).strip() for col in df.columns.values]
-    elif ticker_suffix:
-        # Case: Single-ticker download -> Flat columns (e.g., 'Close')
-        # Prepend ticker suffix to each column name
-        df.columns = [f"{col}_{ticker_suffix}" for col in df.columns]
-    
-    # Drop any 'Adj Close' columns, regardless of how they were formatted
-    # This uses a list comprehension to build a new list of columns to keep
-    cols_to_keep = [col for col in df.columns if not col.startswith('Adj Close_')]
-    df = df[cols_to_keep]
-
+    df.columns = [f"{col}_{ticker}" for col in df.columns]
+    adj_close_col = f'Adj Close_{ticker}'
+    if adj_close_col in df.columns:
+        df.drop(columns=[adj_close_col], inplace=True)
     return df
 
-def fetch_single_stock_data(ticker, start_date, end_date):
+def fetch_multiple_stock_data(tickers, start_date=None, end_date=None, output_filename=None):
     """
-    Fetch historical stock data for a single stock using yfinance
-    and format its columns as 'Category_Ticker'.
-
-    Parameters:
-    ticker (str): Stock ticker symbol.
-    start_date (str): Start date in 'YYYY-MM-DD' format.
-    end_date (str): End date in 'YYYY-MM-DD' format.
-
-    Returns:
-    pd.DataFrame: DataFrame containing historical stock data with formatted columns.
+    Fetch historical stock data for multiple tickers, with optional start and end dates.
+    If no dates are provided, it fetches the largest possible date range.
     """
-    print(f"Fetching data for {ticker} from {start_date} to {end_date}...")
-    try:
-        stock_data = yf.download(ticker, start=start_date, end=end_date, progress=False)
-        if stock_data.empty:
-            print(f"No data found for {ticker} in the specified date range.")
-            return pd.DataFrame() # Return an empty DataFrame
-        
-        # Format columns: Open -> Open_TICKER, High -> High_TICKER etc.
-        stock_data = _format_yfinance_columns(stock_data, ticker_suffix=ticker)
-        
-        return stock_data
-    except Exception as e:
-        print(f"Error fetching data for {ticker}: {e}")
-        return pd.DataFrame() # Return empty DataFrame on error
-
-def fetch_multiple_stock_data(tickers, start_date, end_date, output_filename=None):
-    """
-    Fetch historical stock data for multiple stocks, merge them into a single
-    DataFrame, format columns, and optionally save to a single CSV.
-
-    Parameters:
-    tickers (list): List of stock ticker symbols.
-    start_date (str): Start date in 'YYYY-MM-DD' format.
-    end_date (str): End date in 'YYYY-MM-DD' format.
-    output_filename (str, optional): Name of the CSV file to save the data.
-                                     If None, data is not saved.
-
-    Returns:
-    pd.DataFrame: A single DataFrame containing historical data for all tickers,
-                  with columns formatted as 'Category_Ticker'.
-    """
-    if not isinstance(tickers, list):
-        raise TypeError("Tickers must be a list of strings.")
-    if not tickers:
-        print("No tickers provided. Returning empty DataFrame.")
+    if not isinstance(tickers, list) or not tickers:
+        print("Invalid tickers list. Returning empty DataFrame.")
         return pd.DataFrame()
 
-    print(f"Fetching data for {len(tickers)} tickers from {start_date} to {end_date}...")
+    print(f"Fetching data for {len(tickers)} tickers...")
+    
+    merged_df = None
     try:
-        # yfinance.download for multiple tickers returns a MultiIndex DataFrame
-        all_stocks_data = yf.download(tickers, start=start_date, end=end_date, progress=False)
-        
-        if all_stocks_data.empty:
-            print(f"No data found for any of the tickers in the specified date range.")
+        # If dates are provided, use the efficient yf.download() method
+        if start_date and end_date:
+            print(f"Date range: {start_date} to {end_date}")
+            all_stocks_data = yf.download(tickers, start=start_date, end=end_date, progress=False)
+
+            # Handle the case where only one ticker is fetched
+            if len(tickers) == 1:
+                all_stocks_data.columns = [f"{col}_{tickers[0]}" for col in all_stocks_data.columns]
+            else:
+                all_stocks_data = all_stocks_data.stack(level=1).reset_index(level=1).rename(columns={'level_1': 'Ticker'})
+                all_stocks_data.columns = [f"{col}_{all_stocks_data.pop('Ticker')}" if col != 'Ticker' else col for col in all_stocks_data.columns]
+                # Fix column names to be consistent with the multi-ticker output
+                all_stocks_data.columns = [f"{col.split('_')[0]}_{col.split('_')[1]}" for col in all_stocks_data.columns]
+
+            merged_df = all_stocks_data.drop(columns=[c for c in all_stocks_data.columns if c.startswith('Adj Close_')])
+
+        # If no dates are provided, fetch all available data and find common dates
+        else:
+            print("Date range: All available history to Current date")
+            for ticker in tickers:
+                print(f"Fetching full history for {ticker}...")
+                ticker_data = yf.Ticker(ticker).history(period="max")
+                
+                if ticker_data.empty:
+                    print(f"No data found for {ticker}. Skipping.")
+                    continue
+                
+                formatted_data = _format_ticker_data(ticker_data, ticker)
+                
+                if merged_df is None:
+                    merged_df = formatted_data
+                else:
+                    merged_df = pd.merge(merged_df, formatted_data, left_index=True, right_index=True, how='outer')
+
+        if merged_df is None or merged_df.empty:
+            print("No data could be fetched.")
             return pd.DataFrame()
 
-        # Format columns: ('Close', 'AAPL') -> 'Close_AAPL' and drop 'Adj Close'
-        all_stocks_data = _format_yfinance_columns(all_stocks_data)
+        merged_df.index.name = 'Date'
+        merged_df.dropna(inplace=True)
+        print(f"\nFinal merged DataFrame has {len(merged_df)} common entries.")
 
-        # Ensure the index is named 'Date' for consistency if it's not already
-        if all_stocks_data.index.name != 'Date':
-             all_stocks_data.index.name = 'Date'
-
-        # Remove rows with any NaN values that might arise from missing data for certain tickers
-        # This aligns the data so all tickers have data for the same dates
-        all_stocks_data.dropna(inplace=True)
-        
         if output_filename:
-            all_stocks_data.to_csv(output_filename)
-            print(f"Combined data for {len(tickers)} tickers saved to {output_filename}")
+            merged_df.to_csv(output_filename)
+            print(f"Combined data saved to {output_filename}")
         
-        return all_stocks_data
-    except Exception as e:
-        print(f"Error fetching data for multiple tickers: {e}")
-        return pd.DataFrame()
+        return merged_df
 
+    except Exception as e:
+        print(f"Error fetching data: {e}")
+        return pd.DataFrame()

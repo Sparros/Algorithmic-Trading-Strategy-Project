@@ -159,7 +159,7 @@ def calculate_atr(df_input, ticker_prefix, window=14):
     pd.DataFrame: A new DataFrame with an additional '{ticker_prefix}_ATR{window}' column.
     """
     df = df_input.copy()
-    print(f"  - Calculating ATR for {ticker_prefix} (window={window})...")
+    #print(f"  - Calculating ATR for {ticker_prefix} (window={window})...")
 
     true_range_col = f'{ticker_prefix}_True_Range'
     atr_col_name = f'{ticker_prefix}_ATR{window}'
@@ -248,7 +248,7 @@ def calculate_rsi(df_input, ticker_prefix, window=14):
     df = df_input.copy()
     close_col = f'Close_{ticker_prefix}'
 
-    print(f"  - Calculating RSI for {ticker_prefix} (window={window})...")
+    #print(f"  - Calculating RSI for {ticker_prefix} (window={window})...")
 
     if close_col in df.columns:
         delta = df[close_col].diff()
@@ -467,7 +467,7 @@ def calculate_macd(df_input, ticker_prefix, fast_period=12, slow_period=26, sign
     df = df_input.copy()
     close_col = f'Close_{ticker_prefix}'
 
-    print(f"  - Calculating MACD for {ticker_prefix} (fast={fast_period}, slow={slow_period}, signal={signal_period})...")
+    #print(f"  - Calculating MACD for {ticker_prefix} (fast={fast_period}, slow={slow_period}, signal={signal_period})...")
 
     if close_col in df.columns:
         # Calculate Fast and Slow EMAs
@@ -570,130 +570,54 @@ def add_cross_stock_lagged_correlations(df, target_ticker, source_ticker, window
 
     return df
 
-def prepare_data_for_ml(tickers, start_date, end_date, output_raw_csv=None, output_engineered_csv=None):
+def add_rolling_mean_convergence(df, tickers, window=20):
     """
-    Orchestrates the data fetching and feature engineering pipeline.
-
-    Parameters:
-    tickers (list): List of stock ticker symbols.
-    start_date (str): Start date for data fetching.
-    end_date (str): End date for data fetching.
-    output_raw_csv (str, optional): Filename to save the raw combined data.
-    output_engineered_csv (str, optional): Filename to save the final engineered data.
-
+    Calculates the Rolling Mean Convergence/Divergence for each ticker.
+    This is the ratio of the Close price to its rolling mean.
+    
+    Args:
+        df (pd.DataFrame): The input DataFrame.
+        tickers (list): A list of ticker symbols (e.g., ['WMT', 'KO']).
+        window (int): The window size for the rolling mean.
+        
     Returns:
-    pd.DataFrame: A DataFrame with all engineered features and target variables.
+        pd.DataFrame: The DataFrame with new features added.
     """
-    print("\n--- Starting Data Preparation Pipeline ---")
-
-    # 1. Fetch raw historical data for multiple stocks
-    df = fetch_multiple_stock_data(tickers, start_date, end_date, output_filename=output_raw_csv)
-    if df.empty:
-        print("Pipeline stopped: No data fetched or data is empty after initial processing.")
-        return pd.DataFrame()
-
-    # Get a list of the ticker prefixes for iteration (e.g., 'AAPL', 'MSFT')
-    stock_prefixes = sorted(list(set([col.split('_')[1] for col in df.columns if '_' in col])))
-    print(f"\nDiscovered stock prefixes: {stock_prefixes}")
-
-    # 2. Apply stock-specific features inside the loop
-    for prefix in stock_prefixes:
-        print(f"\nProcessing features for stock prefix: {prefix}")
+    for ticker in tickers:
+        close_col = f'Close_{ticker}'
+        rolling_mean_col = f'{ticker}_RollingMean_{window}'
+        convergence_col = f'{ticker}_RollingMean_Convergence_{window}'
         
-        # Price Range Features (needs High, Low, Open, Close)
-        df = add_price_range_features(df, prefix)
-        # True Range (needs High, Low, Close) - Required for ATR and ADX
-        df = calculate_true_range(df, prefix)
-        # ATR (needs True Range)
-        df = calculate_atr(df, prefix, window=14)
-        # Volume Features (needs Volume)
-        df = add_volume_features(df, prefix, window=20)
-        # OBV (needs Close, Volume)
-        df = calculate_obv(df, prefix)
-        # RSI (needs Close)
-        df = calculate_rsi(df, prefix, window=14)
-        # MACD (needs Close)
-        df = calculate_macd(df, prefix, fast_period=12, slow_period=26, signal_period=9)
-        # Moving Averages (needs Close)
-        df = add_moving_averages(df, prefix, window_sizes=[10, 20, 50], ma_type='SMA')
-        df = add_moving_averages(df, prefix, window_sizes=[12, 26], ma_type='EMA')
-        # Bollinger Bands (needs Close)
-        df = add_bollinger_bands(df, prefix, window=20, num_std=2)
-        # Stochastic Oscillator (needs High, Low, Close)
-        df = calculate_stochastic_oscillator(df, prefix, k_period=14, d_period=3)
-        # ADX (needs High, Low, Close, and True Range)
-        df = calculate_adx(df, prefix, window=14)
-    
-    # 3. Apply features that depend on all stocks or can be applied once
-    print("\nApplying general features and targets...")
-    
-    # Get a list of all 'Close' columns for daily return calculations
-    close_cols_for_returns = [col for col in df.columns if col.startswith('Close_')]
-    df = calculate_daily_returns(df, close_cols_for_returns)
-
-    # --- ADDING CUSTOM FEATURES HERE ---
-    target_ticker = 'WMT'
-    supplier_tickers = ['KO', 'PEP']
-    benchmark_ticker = '^GSPC'
-    
-    if benchmark_ticker in tickers: # Check if benchmark data was fetched
-        df = add_relative_strength(df, target_ticker, benchmark_ticker)
-        df = add_volatility_ratios(df, target_ticker, benchmark_ticker)
-        df = add_volume_ratios(df, target_ticker, benchmark_ticker)
+        # Calculate the rolling mean
+        df[rolling_mean_col] = df[close_col].rolling(window=window).mean()
         
-    df = add_interstock_ratios(df, target_ticker, supplier_tickers)
-    df = add_volume_volatility_interaction(df, target_ticker)
-    for supplier in supplier_tickers:
-        df = add_cross_stock_lagged_correlations(df, target_ticker, supplier)
-    # --- END OF CUSTOM FEATURES ---
-    
-    # Lagged Features (needs features that are already created)
-    features_to_lag = []
-    for prefix in stock_prefixes:
-        features_to_lag.extend([
-            f'Close_{prefix}',
-            f'Close_{prefix}_daily_return',
-            f'{prefix}_RSI14',
-            f'{prefix}_Volume_MA_Ratio'
-        ])
-    lag_periods = [1, 3, 5]
-    df = add_lagged_features(df, features_to_lag, lag_periods)
-
-    # Time-based Features (general)
-    #df = add_time_based_features(df)
-
-    # 4. Final Data Cleanup
-    initial_rows = len(df)
-    df.dropna(inplace=True)
-    rows_dropped = initial_rows - len(df)
-    print(f"\nDropped {rows_dropped} rows due to NaN values after feature engineering.")
-
-    print("\n--- Data Preparation Complete ---")
-    
-    # 5. Save the final DataFrame
-    if output_engineered_csv:
-        df.to_csv(output_engineered_csv)
-        print(f"Final engineered data saved to {output_engineered_csv}")
-    
+        # Calculate the convergence ratio. Add a small epsilon to avoid division by zero.
+        df[convergence_col] = df[close_col] / (df[rolling_mean_col] + 1e-6)
+        
+        # Drop the intermediate rolling mean column
+        df.drop(columns=[rolling_mean_col], inplace=True)
+        
     return df
 
-def create_target_variable(df, ticker, window=1, threshold=0):
+def add_intermarket_spread(df, ticker1, ticker2):
     """
-    Creates a target variable based on the cumulative return over a specified window.
-    This function is designed to be called outside the main pipeline for tuning.
-
-    Parameters:
-    df (pd.DataFrame): The DataFrame with Close prices.
-    ticker (str): The stock ticker for the target.
-    window (int): The number of days for the return period (e.g., 1 for next day, 5 for a week).
-    threshold (float): The minimum return to be considered "up".
-
+    Calculates the spread between two tickers based on their Close prices.
+    
+    Args:
+        df (pd.DataFrame): The input DataFrame.
+        ticker1 (str): The first ticker symbol.
+        ticker2 (str): The second ticker symbol.
+        
     Returns:
-    pd.DataFrame: A DataFrame with the new target and target return columns.
+        pd.DataFrame: The DataFrame with the new spread feature.
     """
-    target_return_col_name = f'{ticker}_target_return_{window}D_{threshold}'
-    df[target_return_col_name] = df[f'Close_{ticker}'].pct_change(periods=window).shift(-window)
-    df[f'{ticker}_Target'] = (df[target_return_col_name] > threshold).astype(int)
+    close_col1 = f'Close_{ticker1}'
+    close_col2 = f'Close_{ticker2}'
+    spread_col = f'{ticker1}_vs_{ticker2}_Spread'
+    
+    # Calculate the simple spread
+    df[spread_col] = df[close_col1] - df[close_col2]
+    
     return df
 
 def apply_kalman_filter_with_lag(data_df, target_tickers, lags):
@@ -734,3 +658,239 @@ def apply_kalman_filter_with_lag(data_df, target_tickers, lags):
             ).shift(lag)
             
     return df_copy
+
+def calculate_roc(df, ticker, window=14):
+    """
+    Calculates the Rate of Change (ROC) for a given ticker.
+    Formula: ROC = [(Current Close - Close n periods ago) / (Close n periods ago)] * 100
+    """
+    close_col = f'Close_{ticker}'
+    roc_col = f'{ticker}_ROC_{window}'
+    
+    # Calculate the percentage change from n periods ago
+    df[roc_col] = df[close_col].pct_change(periods=window) * 100
+    
+    return df
+
+def calculate_mfi(df, ticker, window=14):
+    """
+    Calculates the Money Flow Index (MFI) for a given ticker.
+    MFI combines price and volume to measure buying and selling pressure.
+    """
+    high_col = f'High_{ticker}'
+    low_col = f'Low_{ticker}'
+    close_col = f'Close_{ticker}'
+    volume_col = f'Volume_{ticker}'
+    mfi_col = f'{ticker}_MFI_{window}'
+    
+    # Step 1: Calculate Typical Price
+    typical_price = (df[high_col] + df[low_col] + df[close_col]) / 3
+    
+    # Step 2: Calculate Raw Money Flow
+    money_flow = typical_price * df[volume_col]
+    
+    # Step 3: Differentiate Positive and Negative Money Flow
+    positive_mf = money_flow.where(typical_price > typical_price.shift(1), 0)
+    negative_mf = money_flow.where(typical_price < typical_price.shift(1), 0)
+    
+    # Step 4: Calculate Positive and Negative Money Flow over 'window' periods
+    pos_mf_sum = positive_mf.rolling(window=window).sum()
+    neg_mf_sum = negative_mf.rolling(window=window).sum()
+    
+    # Step 5: Calculate Money Flow Ratio and MFI
+    money_flow_ratio = pos_mf_sum / neg_mf_sum
+    df[mfi_col] = 100 - (100 / (1 + money_flow_ratio))
+    
+    return df
+
+def calculate_cmf(df, ticker, window=21):
+    """
+    Calculates the Chaikin Money Flow (CMF) for a given ticker.
+    CMF measures the amount of money flow over a period.
+    """
+    high_col = f'High_{ticker}'
+    low_col = f'Low_{ticker}'
+    close_col = f'Close_{ticker}'
+    volume_col = f'Volume_{ticker}'
+    cmf_col = f'{ticker}_CMF_{window}'
+
+    # Step 1: Calculate Money Flow Multiplier (MFM)
+    mfm = ((df[close_col] - df[low_col]) - (df[high_col] - df[close_col])) / (df[high_col] - df[low_col])
+    
+    # Step 2: Calculate Money Flow Volume (MFV)
+    mfv = mfm * df[volume_col]
+    
+    # Step 3: Calculate CMF
+    cmf = mfv.rolling(window=window).sum() / df[volume_col].rolling(window=window).sum()
+    df[cmf_col] = cmf
+    
+    return df
+
+def add_feature_interactions(df, prefix):
+    """
+    Adds new features by creating interactions between existing ones.
+    """
+    # RSI multiplied by Volume_MA_Ratio
+    rsi_col = f'{prefix}_RSI14'
+    volume_ratio_col = f'{prefix}_Volume_MA_Ratio'
+    
+    if rsi_col in df.columns and volume_ratio_col in df.columns:
+        df[f'{prefix}_RSI_Vol_Interaction'] = df[rsi_col] * df[volume_ratio_col]
+        #print(f"Added {prefix}_RSI_Vol_Interaction")
+    
+    #  MACD line divided by Close price
+    macd_col = f'{prefix}_MACD_line'
+    close_col = f'Close_{prefix}'
+    
+    if macd_col in df.columns and close_col in df.columns:
+        # Avoid division by zero with a small epsilon
+        df[f'{prefix}_MACD_Close_Ratio'] = df[macd_col] / (df[close_col] + 1e-6)
+        #print(f"Added {prefix}_MACD_Close_Ratio")
+    
+    # Bollinger Band & RSI Interaction
+    upper_bb_col = f'{prefix}_Bollinger_Upper_20'
+    lower_bb_col = f'{prefix}_Bollinger_Lower_20'
+    rsi_col = f'{prefix}_RSI14'
+    close_col = f'Close_{prefix}'
+
+    if all(col in df.columns for col in [upper_bb_col, lower_bb_col, rsi_col, close_col]):
+        # A simple interaction that captures overbought/oversold status within volatility context
+        bb_ratio = (df[close_col] - df[lower_bb_col]) / (df[upper_bb_col] - df[lower_bb_col])
+        df[f'{prefix}_BB_RSI_Interaction'] = bb_ratio * df[rsi_col]
+        #print(f"Added {prefix}_BB_RSI_Interaction")
+    
+    # MACD & Volume Interaction
+    macd_line_col = f'{prefix}_MACD_line'
+    volume_ratio_col = f'{prefix}_Volume_MA_Ratio'
+
+    if macd_line_col in df.columns and volume_ratio_col in df.columns:
+        df[f'{prefix}_MACD_Vol_Interaction'] = df[macd_line_col] * df[volume_ratio_col]
+        #print(f"Added {prefix}_MACD_Vol_Interaction")
+    
+    # True Range & Volume Interaction
+    true_range_col = f'{prefix}_True_Range'
+    volume_col = f'Volume_{prefix}'
+
+    if true_range_col in df.columns and volume_col in df.columns:
+        df[f'{prefix}_TrueRange_Vol_Interaction'] = df[true_range_col] * df[volume_col]
+        #print(f"Added {prefix}_TrueRange_Vol_Interaction")
+        
+    return df
+
+def build_stock_features_orchestrator(
+    tickers, 
+    target_ticker, 
+    supplier_tickers, 
+    benchmark_ticker, 
+    start_date=None, 
+    end_date=None, 
+    output_raw_csv=None, 
+    output_engineered_csv=None
+):
+    """
+    Orchestrates the data fetching and feature engineering pipeline for stock data.
+
+    Parameters:
+    tickers (list): List of stock ticker symbols.
+    target_ticker (str): The primary stock ticker for analysis (e.g., 'WMT').
+    supplier_tickers (list): List of tickers for intermarket features.
+    benchmark_ticker (str): Ticker for the market benchmark (e.g., '^GSPC').
+    start_date (str): Start date for data fetching.
+    end_date (str): End date for data fetching.
+    output_raw_csv (str, optional): Filename to save the raw combined data.
+    output_engineered_csv (str, optional): Filename to save the final engineered data.
+
+    Returns:
+    pd.DataFrame: A DataFrame with all engineered features.
+    """
+    print("\n--- Starting Stock Feature Pipeline ---")
+
+    # 1. Fetch raw historical data for multiple stocks
+    df = fetch_multiple_stock_data(tickers, start_date=start_date, end_date=end_date, output_filename=output_raw_csv)
+    
+    if df.empty:
+        print("Pipeline stopped: No data fetched or data is empty after initial processing.")
+        return pd.DataFrame()
+
+    stock_prefixes = sorted(list(set([col.split('_')[1] for col in df.columns if '_' in col])))
+    print(f"\nDiscovered stock prefixes: {stock_prefixes}")
+
+    # 2. Apply stock-specific features inside the loop
+    for prefix in stock_prefixes:
+        print(f"\nProcessing features for stock prefix: {prefix}")
+        
+        # ... (Your existing stock-specific feature calls) ...
+        df = add_price_range_features(df, prefix)       
+        df = calculate_true_range(df, prefix)           
+        df = calculate_atr(df, prefix, window=14)       
+        df = add_volume_features(df, prefix, window=20) 
+        df = calculate_obv(df, prefix)                  
+        df = calculate_rsi(df, prefix, window=14)
+        df = calculate_macd(df, prefix, fast_period=12, slow_period=26, signal_period=9)
+        df = add_moving_averages(df, prefix, window_sizes=[10, 20, 50], ma_type='SMA')
+        df = add_moving_averages(df, prefix, window_sizes=[12, 26], ma_type='EMA')
+        df = add_bollinger_bands(df, prefix, window=20, num_std=2)
+        df = calculate_stochastic_oscillator(df, prefix, k_period=14, d_period=3)
+        df = calculate_adx(df, prefix, window=14)
+        df = add_rolling_mean_convergence(df, [prefix], window=50)
+        df = calculate_roc(df, prefix, window=12) # Rate of Change
+        df = calculate_mfi(df, prefix, window=14) # Money Flow Index 
+        df = calculate_cmf(df, prefix, window=21) # Chaikin Money Flow
+        df = add_feature_interactions(df, prefix) # Custom feature interactions
+
+    # 3. Apply features that depend on all stocks
+    print("\nApplying general features...")
+    
+    close_cols_for_returns = [col for col in df.columns if col.startswith('Close_')]
+    df = calculate_daily_returns(df, close_cols_for_returns)
+
+    # Add custom inter-stock features based on the new parameters
+    if benchmark_ticker in tickers:
+        df = add_relative_strength(df, target_ticker, benchmark_ticker)
+        df = add_volatility_ratios(df, target_ticker, benchmark_ticker)
+        df = add_volume_ratios(df, target_ticker, benchmark_ticker)
+        
+    df = add_interstock_ratios(df, target_ticker, supplier_tickers)
+    df = add_volume_volatility_interaction(df, target_ticker)
+    for supplier in supplier_tickers:
+        df = add_cross_stock_lagged_correlations(df, target_ticker, supplier)
+
+    # Add the intermarket spread feature
+    # Ensure both tickers are in the DataFrame before calculating
+    if f'Close_{target_ticker}' in df.columns and f'Close_KO' in df.columns:
+        df = add_intermarket_spread(df, target_ticker, 'KO')
+    
+    # 4. Final Data Cleanup
+    initial_rows = len(df)
+    df.dropna(inplace=True)
+    rows_dropped = initial_rows - len(df)
+    print(f"\nDropped {rows_dropped} rows due to NaN values after feature engineering.")
+
+    print("\n--- Data Preparation Complete ---")
+    
+    # 5. Save the final DataFrame
+    if output_engineered_csv:
+        df.to_csv(output_engineered_csv)
+        print(f"Final engineered data saved to {output_engineered_csv}")
+    
+    return df
+
+def create_target_variable(df, ticker, window=1, threshold=0):
+    """
+    Creates a target variable based on the cumulative return over a specified window.
+    This function is designed to be called outside the main pipeline for tuning.
+
+    Parameters:
+    df (pd.DataFrame): The DataFrame with Close prices.
+    ticker (str): The stock ticker for the target.
+    window (int): The number of days for the return period (e.g., 1 for next day, 5 for a week).
+    threshold (float): The minimum return to be considered "up".
+
+    Returns:
+    pd.DataFrame: A DataFrame with the new target and target return columns.
+    """
+    target_return_col_name = f'{ticker}_target_return_{window}D_{threshold}'
+    df[target_return_col_name] = df[f'Close_{ticker}'].pct_change(periods=window).shift(-window)
+    df[f'{ticker}_Target'] = (df[target_return_col_name] > threshold).astype(int)
+    return df
+
