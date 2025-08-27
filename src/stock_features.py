@@ -875,22 +875,5 @@ def build_stock_features_orchestrator(
     
     return df
 
-def create_target_variable(df, ticker, window=1, threshold=0):
-    """
-    Creates a target variable based on the cumulative return over a specified window.
-    This function is designed to be called outside the main pipeline for tuning.
 
-    Parameters:
-    df (pd.DataFrame): The DataFrame with Close prices.
-    ticker (str): The stock ticker for the target.
-    window (int): The number of days for the return period (e.g., 1 for next day, 5 for a week).
-    threshold (float): The minimum return to be considered "up".
-
-    Returns:
-    pd.DataFrame: A DataFrame with the new target and target return columns.
-    """
-    target_return_col_name = f'{ticker}_target_return_{window}D_{threshold}'
-    df[target_return_col_name] = df[f'Close_{ticker}'].pct_change(periods=window).shift(-window)
-    df[f'{ticker}_Target'] = (df[target_return_col_name] > threshold).astype(int)
-    return df
 

@@ -177,3 +177,41 @@ Best cross-validation score: 0.39
     accuracy                           0.59       493
    macro avg       0.59      0.59      0.58       493
 weighted avg       0.59      0.59      0.58       493
+
+
+
+--- Final Coarse Modeling Results Summary - Consumer Staples Data ---
+   Feature_Set          Target_Type  Window             Model  Test_Performance                             Best_Params
+3        pca_3               binary       5           XGBoost            0.4702   {'max_depth': 5, 'n_estimators': 100}
+7    pruned_10               binary       5          CatBoost            0.4424       {'depth': 3, 'n_estimators': 100}
+4        pca_3               binary       5          CatBoost            0.4304        {'depth': 5, 'n_estimators': 50}
+6    pruned_10               binary       5           XGBoost            0.4113    {'max_depth': 5, 'n_estimators': 50}
+8    pruned_10               binary       5      RandomForest            0.4080   {'max_depth': 5, 'n_estimators': 100}
+5        pca_3               binary       5      RandomForest            0.4019   {'max_depth': 5, 'n_estimators': 100}
+1     baseline               binary       5          CatBoost            0.3798        {'depth': 5, 'n_estimators': 50}
+0     baseline               binary       5           XGBoost            0.3578    {'max_depth': 3, 'n_estimators': 50}
+2     baseline               binary       5      RandomForest            0.3467   {'max_depth': 10, 'n_estimators': 50}
+16   pruned_10          multi_class       5          CatBoost            0.3122       {'depth': 5, 'n_estimators': 100}
+17   pruned_10          multi_class       5      RandomForest            0.2585  {'max_depth': 10, 'n_estimators': 100}
+13       pca_3          multi_class       5          CatBoost            0.2581       {'depth': 5, 'n_estimators': 100}
+12       pca_3          multi_class       5           XGBoost            0.2359   {'max_depth': 5, 'n_estimators': 100}
+14       pca_3          multi_class       5      RandomForest            0.2136  {'max_depth': 10, 'n_estimators': 100}
+15   pruned_10          multi_class       5           XGBoost            0.2002    {'max_depth': 5, 'n_estimators': 50}
+25   pruned_10  multi_class_extreme       5          CatBoost            0.1895        {'depth': 5, 'n_estimators': 50}
+21       pca_3  multi_class_extreme       5           XGBoost            0.1783   {'max_depth': 5, 'n_estimators': 100}
+26   pruned_10  multi_class_extreme       5      RandomForest            0.1780   {'max_depth': 10, 'n_estimators': 50}
+10    baseline          multi_class       5          CatBoost            0.1773        {'depth': 5, 'n_estimators': 50}
+9     baseline          multi_class       5           XGBoost            0.1668    {'max_depth': 3, 'n_estimators': 50}
+24   pruned_10  multi_class_extreme       5           XGBoost            0.1624   {'max_depth': 5, 'n_estimators': 100}
+23       pca_3  multi_class_extreme       5      RandomForest            0.1553   {'max_depth': 10, 'n_estimators': 50}
+19    baseline  multi_class_extreme       5          CatBoost            0.1399       {'depth': 5, 'n_estimators': 100}
+11    baseline          multi_class       5      RandomForest            0.1390   {'max_depth': 10, 'n_estimators': 50}
+18    baseline  multi_class_extreme       5           XGBoost            0.1369    {'max_depth': 5, 'n_estimators': 50}
+22       pca_3  multi_class_extreme       5          CatBoost            0.1352       {'depth': 5, 'n_estimators': 100}
+20    baseline  multi_class_extreme       5      RandomForest            0.1160   {'max_depth': 10, 'n_estimators': 50}
+28    baseline           regression       5  LinearRegression            0.0722                                      {}
+27    baseline           regression       5           XGBoost            0.0568    {'max_depth': 5, 'n_estimators': 50}
+29       pca_3           regression       5           XGBoost            0.0363    {'max_depth': 3, 'n_estimators': 50}
+31   pruned_10           regression       5           XGBoost            0.0304    {'max_depth': 5, 'n_estimators': 50}
+32   pruned_10           regression       5  LinearRegression            0.0294                                      {}
+30       pca_3           regression       5  LinearRegression            0.0279                                      {}

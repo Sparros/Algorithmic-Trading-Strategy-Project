@@ -1,0 +1,60 @@
+Coarse Modelling V1
+
+--- Final Experiment Results Summary ---
+                 Model  Window  Threshold  Test_Accuracy  Test_Precision_1  Test_Recall_1  Test_F1_1                                                                                          Best_Params
+0   LogisticRegression      10      0.005       0.584549          0.584337       0.892638   0.706311                                                                   {'C': 10.0, 'solver': 'liblinear'}
+1   LogisticRegression      10      0.010       0.540773          0.525057       0.796200   0.632807                                                                   {'C': 10.0, 'solver': 'liblinear'}
+2   LogisticRegression       5      0.005       0.519313          0.511062       0.796552   0.622642                                                                   {'C': 10.0, 'solver': 'liblinear'}
+3   LogisticRegression       5      0.010       0.503004          0.437831       0.682474   0.533441                                                                    {'C': 0.1, 'solver': 'liblinear'}
+4         RandomForest      10      0.005       0.519313          0.600437       0.421779   0.495495                                                               {'max_depth': 10, 'n_estimators': 100}
+5              XGBoost      10      0.005       0.494421          0.563380       0.429448   0.487380  {'learning_rate': 0.1, 'max_depth': 3, 'n_estimators': 100, 'scale_pos_weight': 0.9627611262488647}
+6              XGBoost      10      0.010       0.523605          0.525316       0.430052   0.472934  {'learning_rate': 0.1, 'max_depth': 3, 'n_estimators': 100, 'scale_pos_weight': 1.2039775624681286}
+7             CatBoost      10      0.005       0.475536          0.543710       0.391104   0.454951      {'depth': 3, 'learning_rate': 0.1, 'n_estimators': 100, 'scale_pos_weight': 0.9627611262488647}
+8             CatBoost       5      0.005       0.512446          0.513274       0.400000   0.449612      {'depth': 3, 'learning_rate': 0.1, 'n_estimators': 100, 'scale_pos_weight': 1.1502487562189054}
+9             CatBoost      10      0.010       0.511588          0.512690       0.348877   0.415211      {'depth': 3, 'learning_rate': 0.1, 'n_estimators': 100, 'scale_pos_weight': 1.2039775624681286}
+10             XGBoost       5      0.005       0.502146          0.500000       0.334483   0.400826  {'learning_rate': 0.1, 'max_depth': 3, 'n_estimators': 100, 'scale_pos_weight': 1.1502487562189054}
+11            CatBoost       5      0.010       0.570815          0.476780       0.317526   0.381188      {'depth': 3, 'learning_rate': 0.1, 'n_estimators': 100, 'scale_pos_weight': 1.5733849359928551}
+12        RandomForest      10      0.010       0.519313          0.533101       0.264249   0.353349                                                               {'max_depth': 10, 'n_estimators': 100}
+13        RandomForest       5      0.010       0.556223          0.442857       0.255670   0.324183                                                                {'max_depth': 5, 'n_estimators': 200}
+14             XGBoost       5      0.010       0.558798          0.447273       0.253608   0.323684  {'learning_rate': 0.1, 'max_depth': 3, 'n_estimators': 100, 'scale_pos_weight': 1.5733849359928551}
+15        RandomForest       5      0.005       0.496996          0.488372       0.217241   0.300716                                                                {'max_depth': 5, 'n_estimators': 100}
+
+
+Coarse Modelling V2:
+
+
+--- Final Coarse Modeling Results Summary ---
+   Feature_Set          Target_Type  Window             Model  Test_Performance                             Best_Params
+3        pca_3               binary       5           XGBoost            0.4702   {'max_depth': 5, 'n_estimators': 100}
+7    pruned_10               binary       5          CatBoost            0.4424       {'depth': 3, 'n_estimators': 100}
+4        pca_3               binary       5          CatBoost            0.4304        {'depth': 5, 'n_estimators': 50}
+6    pruned_10               binary       5           XGBoost            0.4113    {'max_depth': 5, 'n_estimators': 50}
+8    pruned_10               binary       5      RandomForest            0.4080   {'max_depth': 5, 'n_estimators': 100}
+5        pca_3               binary       5      RandomForest            0.4019   {'max_depth': 5, 'n_estimators': 100}
+1     baseline               binary       5          CatBoost            0.3798        {'depth': 5, 'n_estimators': 50}
+0     baseline               binary       5           XGBoost            0.3578    {'max_depth': 3, 'n_estimators': 50}
+2     baseline               binary       5      RandomForest            0.3467   {'max_depth': 10, 'n_estimators': 50}
+16   pruned_10          multi_class       5          CatBoost            0.3122       {'depth': 5, 'n_estimators': 100}
+17   pruned_10          multi_class       5      RandomForest            0.2585  {'max_depth': 10, 'n_estimators': 100}
+13       pca_3          multi_class       5          CatBoost            0.2581       {'depth': 5, 'n_estimators': 100}
+12       pca_3          multi_class       5           XGBoost            0.2359   {'max_depth': 5, 'n_estimators': 100}
+14       pca_3          multi_class       5      RandomForest            0.2136  {'max_depth': 10, 'n_estimators': 100}
+15   pruned_10          multi_class       5           XGBoost            0.2002    {'max_depth': 5, 'n_estimators': 50}
+25   pruned_10  multi_class_extreme       5          CatBoost            0.1895        {'depth': 5, 'n_estimators': 50}
+21       pca_3  multi_class_extreme       5           XGBoost            0.1783   {'max_depth': 5, 'n_estimators': 100}
+26   pruned_10  multi_class_extreme       5      RandomForest            0.1780   {'max_depth': 10, 'n_estimators': 50}
+10    baseline          multi_class       5          CatBoost            0.1773        {'depth': 5, 'n_estimators': 50}
+9     baseline          multi_class       5           XGBoost            0.1668    {'max_depth': 3, 'n_estimators': 50}
+24   pruned_10  multi_class_extreme       5           XGBoost            0.1624   {'max_depth': 5, 'n_estimators': 100}
+23       pca_3  multi_class_extreme       5      RandomForest            0.1553   {'max_depth': 10, 'n_estimators': 50}
+19    baseline  multi_class_extreme       5          CatBoost            0.1399       {'depth': 5, 'n_estimators': 100}
+11    baseline          multi_class       5      RandomForest            0.1390   {'max_depth': 10, 'n_estimators': 50}
+18    baseline  multi_class_extreme       5           XGBoost            0.1369    {'max_depth': 5, 'n_estimators': 50}
+22       pca_3  multi_class_extreme       5          CatBoost            0.1352       {'depth': 5, 'n_estimators': 100}
+20    baseline  multi_class_extreme       5      RandomForest            0.1160   {'max_depth': 10, 'n_estimators': 50}
+28    baseline           regression       5  LinearRegression            0.0722                                      {}
+27    baseline           regression       5           XGBoost            0.0568    {'max_depth': 5, 'n_estimators': 50}
+29       pca_3           regression       5           XGBoost            0.0363    {'max_depth': 3, 'n_estimators': 50}
+31   pruned_10           regression       5           XGBoost            0.0304    {'max_depth': 5, 'n_estimators': 50}
+32   pruned_10           regression       5  LinearRegression            0.0294                                      {}
+30       pca_3           regression       5  LinearRegression            0.0279                                      {}
