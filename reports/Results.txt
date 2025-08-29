@@ -215,3 +215,13 @@ weighted avg       0.59      0.59      0.58       493
 31   pruned_10           regression       5           XGBoost            0.0304    {'max_depth': 5, 'n_estimators': 50}
 32   pruned_10           regression       5  LinearRegression            0.0294                                      {}
 30       pca_3           regression       5  LinearRegression            0.0279                                      {}
+
+--- Final Classification Report ---
+              precision    recall  f1-score   support
+
+           0       0.52      0.75      0.61       537
+           1       0.53      0.28      0.37       529
+
+    accuracy                           0.52      1066
+   macro avg       0.52      0.52      0.49      1066
+weighted avg       0.52      0.52      0.49      1066
