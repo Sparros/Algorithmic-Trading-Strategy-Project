@@ -95,7 +95,7 @@ def fetch_google_trends(
         print(f"Error fetching Google Trends data: {e}")
         return pd.DataFrame()
 
-def macro_data_orchestrator(macro_funcs_to_fetch: list, fred_series_ids_dict: dict, start_date: str = None) -> pd.DataFrame:
+def macro_data_orchestrator(macro_funcs_to_fetch: list, fred_series_ids_dict: dict, start_date: str = None, save_path = None) -> pd.DataFrame:
     """
     Orchestrates the fetching, cleaning, and merging of all macroeconomic 
     data into a single, time-series-ready DataFrame using the FRED API.
@@ -137,7 +137,12 @@ def macro_data_orchestrator(macro_funcs_to_fetch: list, fred_series_ids_dict: di
     
     # After all data is merged, drop rows with all NaN values to clean up the timeline
     if not final_df.empty:
-        final_df.dropna(how='any', inplace=True)
+        final_df.dropna(how='all', inplace=True)
+
+    # Save to CSV if a filename is provided
+    if save_path:
+        out_path = os.path.join(save_path, f"macros.csv")
+        final_df.to_csv(out_path, index=True)
 
     print("Data orchestration complete.")
     return final_df.sort_index()

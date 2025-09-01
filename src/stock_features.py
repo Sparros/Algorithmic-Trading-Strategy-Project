@@ -335,8 +335,10 @@ def add_bollinger_bands(df_input, ticker_prefix, window=20, num_std=2):
         df[f'{ticker_prefix}_BB_Lower{window}'] = middle_band - (std_dev * num_std)
 
         # Bandwidth: Indicates volatility
-        df[f'{ticker_prefix}_BB_Bandwidth{window}'] = (df[f'{ticker_prefix}_BB_Upper{window}'] - df[f'{ticker_prefix}_BB_Lower{window}']) / middle_band
-
+        df[f'{ticker_prefix}_BB_Bandwidth{window}'] = (
+        (df[f'{ticker_prefix}_BB_Upper{window}'] - df[f'{ticker_prefix}_BB_Lower{window}']) /
+        (middle_band + 1e-9)
+    )
         # %B: Indicates where the price is relative to the bands
         # Avoid division by zero
         denom = (df[f'{ticker_prefix}_BB_Upper{window}'] - df[f'{ticker_prefix}_BB_Lower{window}'])
@@ -539,12 +541,11 @@ def add_volatility_ratios(df, stock_ticker, benchmark_ticker='^GSPC'):
     return df
 
 def add_volume_ratios(df, stock_ticker, benchmark_ticker='^GSPC'):
-    """
-    Calculates the ratio of a stock's volume to a benchmark's volume.
-    High values can indicate unusual trading interest in a specific stock.
-    """
-    # Assuming the volume column names are like 'Volume_WMT' and 'Volume_^GSPC'
-    df[f'{stock_ticker}_vs_{benchmark_ticker}_VolumeRatio'] = df[f'Volume_{stock_ticker}'] / df[f'Volume_{benchmark_ticker}']
+    v_s = df.get(f'Volume_{stock_ticker}')
+    v_b = df.get(f'Volume_{benchmark_ticker}')
+    if v_s is None or v_b is None:
+        return df
+    df[f'{stock_ticker}_vs_{benchmark_ticker}_VolumeRatio'] = v_s / (v_b + 1e-9)
     return df
 
 def add_volume_volatility_interaction(df, stock_ticker):
@@ -561,13 +562,13 @@ def add_cross_stock_lagged_correlations(df, target_ticker, source_ticker, window
     Calculates the rolling correlation between the daily returns of two stocks.
     This directly tests the hypothesis that a supplier's movement might predict a retailer's movement.
     """
-    # Calculate daily returns for both stocks
-    target_returns = df[f'Close_{target_ticker}_daily_return']
-    source_returns = df[f'Close_{source_ticker}_daily_return']
-
-    # Calculate a rolling correlation between the two returns
-    df[f'{target_ticker}_vs_{source_ticker}_RollingCorr_{window}D'] = target_returns.rolling(window=window).corr(source_returns)
-
+    tr = df.get(f'Close_{target_ticker}_daily_return')
+    sr = df.get(f'Close_{source_ticker}_daily_return')
+    if tr is None or sr is None:
+        return df
+    df[f'{target_ticker}_vs_{source_ticker}_RollingCorr_{window}D'] = (
+        tr.rolling(window=window, min_periods=window).corr(sr)
+    )
     return df
 
 def add_rolling_mean_convergence(df, tickers, window=20):
@@ -622,41 +623,39 @@ def add_intermarket_spread(df, ticker1, ticker2):
 
 def apply_kalman_filter_with_lag(data_df, target_tickers, lags):
     """
-    Applies a Kalman filter to specified stock tickers and adds lagged,
-    filtered prices as new columns to the DataFrame to prevent data leakage.
-    
-    Args:
-        data_df (pd.DataFrame): The input DataFrame containing stock data.
-        target_tickers (list of str): A list of stock tickers to filter.
-        lags (list of int): A list of lag periods to create for the new features.
-    
-    Returns:
-        pd.DataFrame: The DataFrame with the new lagged, filtered columns added.
+    Forward-only Kalman filter (no smoother), then create lagged features.
     """
     df_copy = data_df.copy()
-    
+
     for ticker in target_tickers:
-        price_series = df_copy[f'Close_{ticker}']
-        measurements = np.asarray(price_series).reshape(-1, 1)
+        close_col = f'Close_{ticker}'
+        if close_col not in df_copy.columns:
+            continue
 
-        # Initialize and run the Kalman filter
-        kf = KalmanFilter(transition_matrices=[1],
-                          observation_matrices=[1],
-                          initial_state_mean=measurements[0],
-                          initial_state_covariance=1,
-                          observation_covariance=1,
-                          transition_covariance=0.01)
+        s = df_copy[close_col].astype(float)
+        first_valid = s.first_valid_index()
+        if first_valid is None:
+            continue
 
-        (filtered_state_means, filtered_state_covariances) = kf.filter(measurements)
-        filtered_prices = filtered_state_means.flatten()
+        start_pos = s.index.get_loc(first_valid)
+        meas_valid = s.iloc[start_pos:].values.reshape(-1, 1)
 
-        # Add new lagged features for each specified lag
+        # filter only on valid window
+        kf = KalmanFilter(
+            transition_matrices=[1],
+            observation_matrices=[1],
+            initial_state_mean=float(meas_valid[0, 0]),
+            initial_state_covariance=1.0,
+            observation_covariance=1.0,
+            transition_covariance=0.01
+        )
+        filtered_valid, _ = kf.filter(meas_valid)
+        filtered_series = pd.Series(index=s.index, dtype=float)
+        filtered_series.iloc[start_pos:] = filtered_valid.flatten()
+
         for lag in lags:
-            new_col_name = f'Kalman_Filtered_Close_{ticker}_lag_{lag}'
-            df_copy[new_col_name] = pd.Series(
-                filtered_prices, index=df_copy.index
-            ).shift(lag)
-            
+            df_copy[f'Kalman_Filtered_Close_{ticker}_lag_{lag}'] = filtered_series.shift(lag)
+
     return df_copy
 
 def calculate_roc(df, ticker, window=14):
@@ -726,56 +725,203 @@ def calculate_cmf(df, ticker, window=21):
     
     return df
 
+def _first_existing(df, names):
+    for n in names:
+        if n in df.columns:
+            return n
+    return None
+
 def add_feature_interactions(df, prefix):
-    """
-    Adds new features by creating interactions between existing ones.
-    """
-    # RSI multiplied by Volume_MA_Ratio
-    rsi_col = f'{prefix}_RSI14'
-    volume_ratio_col = f'{prefix}_Volume_MA_Ratio'
-    
-    if rsi_col in df.columns and volume_ratio_col in df.columns:
-        df[f'{prefix}_RSI_Vol_Interaction'] = df[rsi_col] * df[volume_ratio_col]
-        #print(f"Added {prefix}_RSI_Vol_Interaction")
-    
-    #  MACD line divided by Close price
-    macd_col = f'{prefix}_MACD_line'
-    close_col = f'Close_{prefix}'
-    
-    if macd_col in df.columns and close_col in df.columns:
-        # Avoid division by zero with a small epsilon
-        df[f'{prefix}_MACD_Close_Ratio'] = df[macd_col] / (df[close_col] + 1e-6)
-        #print(f"Added {prefix}_MACD_Close_Ratio")
-    
-    # Bollinger Band & RSI Interaction
-    upper_bb_col = f'{prefix}_Bollinger_Upper_20'
-    lower_bb_col = f'{prefix}_Bollinger_Lower_20'
-    rsi_col = f'{prefix}_RSI14'
-    close_col = f'Close_{prefix}'
+    rsi   = _first_existing(df, [f'{prefix}_RSI14', f'{prefix}_rsi_14'])
+    macdl = _first_existing(df, [f'{prefix}_MACD_Line', f'{prefix}_MACD_line'])
+    volr  = _first_existing(df, [f'{prefix}_Volume_MA_Ratio'])
+    upper = _first_existing(df, [f'{prefix}_BB_Upper20', f'{prefix}_Bollinger_Upper_20'])
+    lower = _first_existing(df, [f'{prefix}_BB_Lower20', f'{prefix}_Bollinger_Lower_20'])
+    close = f'Close_{prefix}'
 
-    if all(col in df.columns for col in [upper_bb_col, lower_bb_col, rsi_col, close_col]):
-        # A simple interaction that captures overbought/oversold status within volatility context
-        bb_ratio = (df[close_col] - df[lower_bb_col]) / (df[upper_bb_col] - df[lower_bb_col])
-        df[f'{prefix}_BB_RSI_Interaction'] = bb_ratio * df[rsi_col]
-        #print(f"Added {prefix}_BB_RSI_Interaction")
-    
-    # MACD & Volume Interaction
-    macd_line_col = f'{prefix}_MACD_line'
-    volume_ratio_col = f'{prefix}_Volume_MA_Ratio'
+    if rsi and volr:
+        df[f'{prefix}_RSI_Vol_Interaction'] = df[rsi] * df[volr]
 
-    if macd_line_col in df.columns and volume_ratio_col in df.columns:
-        df[f'{prefix}_MACD_Vol_Interaction'] = df[macd_line_col] * df[volume_ratio_col]
-        #print(f"Added {prefix}_MACD_Vol_Interaction")
-    
-    # True Range & Volume Interaction
-    true_range_col = f'{prefix}_True_Range'
-    volume_col = f'Volume_{prefix}'
+    if macdl and close in df.columns:
+        df[f'{prefix}_MACD_Close_Ratio'] = df[macdl] / (df[close] + 1e-9)
 
-    if true_range_col in df.columns and volume_col in df.columns:
-        df[f'{prefix}_TrueRange_Vol_Interaction'] = df[true_range_col] * df[volume_col]
-        #print(f"Added {prefix}_TrueRange_Vol_Interaction")
-        
+    if upper and lower and rsi and close in df.columns:
+        bb_ratio = (df[close] - df[lower]) / (df[upper] - df[lower] + 1e-9)
+        df[f'{prefix}_BB_RSI_Interaction'] = bb_ratio * df[rsi]
+
+    if macdl and volr:
+        df[f'{prefix}_MACD_Vol_Interaction'] = df[macdl] * df[volr]
+
+    tr, vol = f'{prefix}_True_Range', f'Volume_{prefix}'
+    if tr in df.columns and vol in df.columns:
+        df[f'{prefix}_TrueRange_Vol_Interaction'] = df[tr] * df[vol]
     return df
+
+def add_event_time_features(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
+    """
+    Feature set using ONLY that ticker's own columns (no leakage).
+    Expects Close_<prefix> (and optionally Open_<prefix>).
+    """
+    close = df[f"Close_{prefix}"].astype(float)
+    feat = pd.DataFrame(index=df.index)
+
+    ret1 = close.pct_change()
+    feat[f"{prefix}_ret_1"]   = ret1
+    feat[f"{prefix}_ret_5"]   = close.pct_change(5)
+    feat[f"{prefix}_ret_20"]  = close.pct_change(20)
+
+    vol20 = ret1.rolling(20).std()
+    vol60 = ret1.rolling(60).std()
+    feat[f"{prefix}_vol_20"]    = vol20
+    feat[f"{prefix}_vol_60"]    = vol60
+    feat[f"{prefix}_vol_ratio"] = vol20 / (vol60 + 1e-9)
+
+    ma20  = close.rolling(20).mean()
+    ma50  = close.rolling(50).mean()
+    std20 = ret1.rolling(20).std()
+    feat[f"{prefix}_dist_ma20"] = (close / ma20 - 1)
+    feat[f"{prefix}_dist_ma50"] = (close / ma50 - 1)
+    feat[f"{prefix}_bb_pos_20"] = (close - ma20) / (2*std20*close.shift(1) + 1e-9)
+
+    # Oscillators / momentum
+    roll_min = close.rolling(14).min()
+    roll_max = close.rolling(14).max()
+    feat[f"{prefix}_stoch_k14"] = (close - roll_min) / (roll_max - roll_min + 1e-9)
+
+    ema12 = close.ewm(span=12, adjust=False).mean()
+    ema26 = close.ewm(span=26, adjust=False).mean()
+    macd  = ema12 - ema26
+    signal= macd.ewm(span=9, adjust=False).mean()
+    feat[f"{prefix}_macd_hist"] = macd - signal
+
+    feat[f"{prefix}_rsi_14"] = (
+        ret1.clip(lower=0).rolling(14).mean() /
+        (ret1.abs().rolling(14).mean() + 1e-9)
+    )
+
+    # Shape of recent returns
+    r20 = ret1.rolling(20)
+    feat[f"{prefix}_skew_20"] = r20.apply(lambda x: pd.Series(x).skew(), raw=False)
+    feat[f"{prefix}_kurt_20"] = r20.apply(lambda x: pd.Series(x).kurt(), raw=False)
+
+    # Overnight gap (if Open available)
+    open_col = f"Open_{prefix}"
+    if open_col in df.columns:
+        o = df[open_col].astype(float)
+        feat[f"{prefix}_overnight_ret"] = o.pct_change() - ret1
+
+    # Merge back
+    return df.join(feat)
+
+def add_rolling_beta(df: pd.DataFrame, prefix: str, bench_prefix: str, window=60):
+    """
+    Rolling OLS beta of ticker returns vs benchmark returns.
+    Uses Close_<prefix> and Close_<bench_prefix>.
+    """
+    p = df[f"Close_{prefix}"].astype(float).pct_change()
+    b = df[f"Close_{bench_prefix}"].astype(float).pct_change()
+    cov = p.rolling(window).cov(b)
+    var = b.rolling(window).var()
+    beta = cov / (var + 1e-12)
+    df[f"{prefix}_beta_{bench_prefix}_{window}"] = beta
+    return df
+
+def sector_and_market_relatives(df, target_ticker, sector_etf=None, market_bench="^GSPC", beta_window=60):
+    """
+    Add relative-strength & rolling beta vs the sector ETF (if provided/available)
+    and the market benchmark (default ^GSPC). Falls back to XLP if no sector_etf given
+    but XLP is present.
+    """
+    tgt_close = f'Close_{target_ticker}'
+    if tgt_close not in df.columns:
+        return df  # nothing to do
+
+    # Sector leg
+    if sector_etf and f'Close_{sector_etf}' in df.columns:
+        df = add_relative_strength(df, target_ticker, sector_etf)
+        df = add_rolling_beta(df, target_ticker, sector_etf, window=beta_window)
+    elif 'Close_XLP' in df.columns:  # sensible fallback
+        df = add_relative_strength(df, target_ticker, 'XLP')
+        df = add_rolling_beta(df, target_ticker, 'XLP', window=beta_window)
+
+    # Market leg
+    if market_bench and f'Close_{market_bench}' in df.columns:
+        df = add_relative_strength(df, target_ticker, market_bench)
+        df = add_rolling_beta(df, target_ticker, market_bench, window=beta_window)
+    elif 'Close_^GSPC' in df.columns:  # fallback to S&P if string differs
+        df = add_relative_strength(df, target_ticker, '^GSPC')
+        df = add_rolling_beta(df, target_ticker, '^GSPC', window=beta_window)
+
+    return df
+
+
+def add_volume_shock(df, prefix, long_win=60, short_win=5):
+    v = df.get(f'Volume_{prefix}')
+    if v is None: return df
+    mu = v.rolling(long_win).mean()
+    sd = v.rolling(long_win).std()
+    df[f'{prefix}_vol_z_{long_win}'] = (v - mu) / (sd + 1e-9)
+    df[f'{prefix}_vol_ma_ratio_{short_win}_{long_win}'] = v.rolling(short_win).mean() / (mu + 1e-9)
+    return df
+
+def add_gap_features(df, prefix):
+    o, c = df.get(f'Open_{prefix}'), df.get(f'Close_{prefix}')
+    if o is None or c is None: return df
+    prev_c = c.shift(1)
+    gap = (o - prev_c) / (prev_c + 1e-9)
+    df[f'{prefix}_gap_overnight'] = gap
+    atr = df.get(f'{prefix}_ATR14')
+    if atr is not None:
+        df[f'{prefix}_gap_vs_ATR'] = gap.abs() / (atr / (prev_c + 1e-9) + 1e-9)
+    return df
+
+def add_drawdown_features(df, prefix, window=252):
+    c = df[f'Close_{prefix}'].astype(float)
+    roll_max = c.rolling(window).max()
+    df[f'{prefix}_drawdown_{window}'] = c/(roll_max + 1e-9) - 1.0
+    return df
+
+def add_streak_features(df, prefix):
+    r = df[f'Close_{prefix}'].pct_change()
+    s = np.sign(r).fillna(0)
+
+    def _streak(x):
+        # length of current consecutive 1’s (or -1’s) ending at t
+        grp = (x != x.shift()).cumsum()
+        return x.groupby(grp).cumcount() + 1
+
+    up = (s > 0).astype(int)
+    down = (s < 0).astype(int)
+    df[f'{prefix}_up_streak'] = _streak(up) * up
+    df[f'{prefix}_down_streak'] = _streak(down) * down
+    return df
+
+def add_range_volatility(df, prefix, window=20):
+    h, l = df.get(f'High_{prefix}'), df.get(f'Low_{prefix}')
+    if h is None or l is None: return df
+    parkinson_var = (1.0/(4*np.log(2))) * (np.log((h / l).clip(lower=1e-9)) ** 2)
+    df[f'{prefix}_parkinson_{window}'] = parkinson_var.rolling(window).mean()
+    return df
+
+def add_rolling_autocorr(df, prefix, window=20, lag=1):
+    r = df[f'Close_{prefix}'].pct_change()
+    df[f'{prefix}_autocorr_l{lag}_w{window}'] = r.rolling(window).apply(
+        lambda x: pd.Series(x).autocorr(lag=lag), raw=False
+    )
+    return df
+
+def add_excess_return(df, stock, bench='^GSPC'):
+    s = df[f'Close_{stock}'].pct_change()
+    b = df[f'Close_{bench}'].pct_change()
+    df[f'{stock}_excess_ret_{bench}'] = s - b
+    return df
+
+def add_rolling_corr(df, stock, peer, window=60):
+    s = df[f'Close_{stock}'].pct_change()
+    p = df[f'Close_{peer}'].pct_change()
+    df[f'{stock}_corr_{peer}_{window}'] = s.rolling(window).corr(p)
+    return df
+
 
 def build_stock_features_orchestrator(
     tickers, 
@@ -785,46 +931,33 @@ def build_stock_features_orchestrator(
     start_date=None, 
     end_date=None, 
     output_raw_csv=None, 
-    output_engineered_csv=None
+    output_engineered_csv=None,
+    kalman_lags=None,                 # e.g., [1,5,10] or None
+    kalman_targets="all",             # "all" or list of tickers
+    sector_etf=None,                  # pass "XLP"/"XLV"/... when you have it
+    dropna_frac=0.90                  # % of non-NaN required per row
 ):
-    """
-    Orchestrates the data fetching and feature engineering pipeline for stock data.
-
-    Parameters:
-    tickers (list): List of stock ticker symbols.
-    target_ticker (str): The primary stock ticker for analysis (e.g., 'WMT').
-    supplier_tickers (list): List of tickers for intermarket features.
-    benchmark_ticker (str): Ticker for the market benchmark (e.g., '^GSPC').
-    start_date (str): Start date for data fetching.
-    end_date (str): End date for data fetching.
-    output_raw_csv (str, optional): Filename to save the raw combined data.
-    output_engineered_csv (str, optional): Filename to save the final engineered data.
-
-    Returns:
-    pd.DataFrame: A DataFrame with all engineered features.
-    """
     print("\n--- Starting Stock Feature Pipeline ---")
 
-    # 1. Fetch raw historical data for multiple stocks
-    df = fetch_multiple_stock_data(tickers, start_date=start_date, end_date=end_date, output_filename=output_raw_csv)
-    
+    df = fetch_multiple_stock_data(
+        tickers, start_date=start_date, end_date=end_date, output_filename=output_raw_csv
+    )
     if df.empty:
         print("Pipeline stopped: No data fetched or data is empty after initial processing.")
         return pd.DataFrame()
 
-    stock_prefixes = sorted(list(set([col.split('_')[1] for col in df.columns if '_' in col])))
+    stock_prefixes = sorted({col.split('_')[1] for col in df.columns if '_' in col})
     print(f"\nDiscovered stock prefixes: {stock_prefixes}")
 
-    # 2. Apply stock-specific features inside the loop
+    # 2) Per-ticker features
     for prefix in stock_prefixes:
         print(f"\nProcessing features for stock prefix: {prefix}")
-        
-        # ... (Your existing stock-specific feature calls) ...
-        df = add_price_range_features(df, prefix)       
-        df = calculate_true_range(df, prefix)           
-        df = calculate_atr(df, prefix, window=14)       
-        df = add_volume_features(df, prefix, window=20) 
-        df = calculate_obv(df, prefix)                  
+        df = add_event_time_features(df, prefix)
+        df = add_price_range_features(df, prefix)
+        df = calculate_true_range(df, prefix)
+        df = calculate_atr(df, prefix, window=14)
+        df = add_volume_features(df, prefix, window=20)
+        df = calculate_obv(df, prefix)
         df = calculate_rsi(df, prefix, window=14)
         df = calculate_macd(df, prefix, fast_period=12, slow_period=26, signal_period=9)
         df = add_moving_averages(df, prefix, window_sizes=[10, 20, 50], ma_type='SMA')
@@ -833,46 +966,58 @@ def build_stock_features_orchestrator(
         df = calculate_stochastic_oscillator(df, prefix, k_period=14, d_period=3)
         df = calculate_adx(df, prefix, window=14)
         df = add_rolling_mean_convergence(df, [prefix], window=50)
-        df = calculate_roc(df, prefix, window=12) # Rate of Change
-        df = calculate_mfi(df, prefix, window=14) # Money Flow Index 
-        df = calculate_cmf(df, prefix, window=21) # Chaikin Money Flow
-        df = add_feature_interactions(df, prefix) # Custom feature interactions
+        df = calculate_roc(df, prefix, window=12)
+        df = calculate_mfi(df, prefix, window=14)
+        df = calculate_cmf(df, prefix, window=21)
+        df = add_feature_interactions(df, prefix)
+        df = add_volume_shock(df, prefix)
+        df = add_gap_features(df, prefix)
+        df = add_drawdown_features(df, prefix, window=252)
+        df = add_streak_features(df, prefix)
+        df = add_range_volatility(df, prefix, window=20)
+        df = add_rolling_autocorr(df, prefix, window=20, lag=1)
 
-    # 3. Apply features that depend on all stocks
+    # 3) Cross-ticker features
     print("\nApplying general features...")
-    
-    close_cols_for_returns = [col for col in df.columns if col.startswith('Close_')]
+    close_cols_for_returns = [c for c in df.columns if c.startswith('Close_')]
     df = calculate_daily_returns(df, close_cols_for_returns)
 
-    # Add custom inter-stock features based on the new parameters
     if benchmark_ticker in tickers:
         df = add_relative_strength(df, target_ticker, benchmark_ticker)
         df = add_volatility_ratios(df, target_ticker, benchmark_ticker)
         df = add_volume_ratios(df, target_ticker, benchmark_ticker)
-        
+
     df = add_interstock_ratios(df, target_ticker, supplier_tickers)
     df = add_volume_volatility_interaction(df, target_ticker)
     for supplier in supplier_tickers:
         df = add_cross_stock_lagged_correlations(df, target_ticker, supplier)
 
-    # Add the intermarket spread feature
-    # Ensure both tickers are in the DataFrame before calculating
-    if f'Close_{target_ticker}' in df.columns and f'Close_KO' in df.columns:
-        df = add_intermarket_spread(df, target_ticker, 'KO')
-    
-    # 4. Final Data Cleanup
-    initial_rows = len(df)
-    df.dropna(inplace=True)
-    rows_dropped = initial_rows - len(df)
-    print(f"\nDropped {rows_dropped} rows due to NaN values after feature engineering.")
+    # use sector ETF when provided (so this works for non-staples, too)
+    df = sector_and_market_relatives(df, target_ticker, sector_etf=sector_etf, market_bench="^GSPC")
 
-    print("\n--- Data Preparation Complete ---")
-    
-    # 5. Save the final DataFrame
+    if f'Close_{target_ticker}' in df.columns and 'Close_KO' in df.columns:
+        df = add_intermarket_spread(df, target_ticker, 'KO')
+
+    # 4) OPTIONAL Kalman (do not smooth; we only filter)
+    if kalman_lags:
+        if kalman_targets == "all":
+            kt = stock_prefixes
+        elif isinstance(kalman_targets, (list, tuple, set)):
+            kt = list(kalman_targets)
+        else:
+            kt = [target_ticker]
+        df = apply_kalman_filter_with_lag(df, kt, kalman_lags)
+
+    # 5) Row pruning
+    initial_rows = len(df)
+    min_non_na = int(dropna_frac * df.shape[1])
+    df = df.dropna(thresh=min_non_na)
+    print(f"\nDropped {initial_rows - len(df)} rows due to NaN values after feature engineering.")
+
     if output_engineered_csv:
         df.to_csv(output_engineered_csv)
         print(f"Final engineered data saved to {output_engineered_csv}")
-    
+
     return df
 
 
