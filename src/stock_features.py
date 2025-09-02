@@ -3,6 +3,18 @@ import pandas as pd
 from pykalman import KalmanFilter
 from src.stock_data import fetch_multiple_stock_data
 
+EPS = 1e-9
+
+def _safe_div(a, b):
+    """Elementwise safe divide, returns NaN where denom == 0."""
+    return a / b.replace(0, np.nan)
+
+def _has_cols(df, cols):
+    return all(c in df.columns for c in cols)
+
+def _has_volume(df, prefix):
+    return f"Volume_{prefix}" in df.columns
+
 def calculate_daily_returns(df_input, cols_to_process=['Close']):
     """
     Calculate daily returns for specified columns in a DataFrame.
@@ -99,21 +111,15 @@ def add_price_range_features(df_input, ticker_prefix):
     pd.DataFrame: DataFrame with additional range features.
     """
     df = df_input.copy()
-    high_col = f'High_{ticker_prefix}'
-    low_col = f'Low_{ticker_prefix}'
-    open_col = f'Open_{ticker_prefix}'
-    close_col = f'Close_{ticker_prefix}'
-
-    if all(col in df.columns for col in [high_col, low_col, open_col, close_col]):
-        df[f'{ticker_prefix}_HighLow_Range'] = df[high_col] - df[low_col]
-        df[f'{ticker_prefix}_OpenClose_Range'] = df[close_col] - df[open_col]
-        
-        range_denom = df[high_col] - df[low_col]
-        # Use a temporary series, then fillna, then assign
-        close_to_range_ratio = (df[close_col] - df[low_col]) / range_denom
-        df[f'{ticker_prefix}_Close_to_Range_Ratio'] = close_to_range_ratio.fillna(0.5)
+    H, L, O, C = (f'High_{ticker_prefix}', f'Low_{ticker_prefix}',
+                  f'Open_{ticker_prefix}', f'Close_{ticker_prefix}')
+    if _has_cols(df, [H,L,O,C]):
+        rng = df[H] - df[L]
+        df[f'{ticker_prefix}_HighLow_Range'] = rng
+        df[f'{ticker_prefix}_OpenClose_Range'] = df[C] - df[O]
+        df[f'{ticker_prefix}_Close_to_Range_Ratio'] = _safe_div(df[C] - df[L], rng).fillna(0.5)
     else:
-        print(f"Warning: Missing HLOC columns for {ticker_prefix} to calculate range features.")
+        print(f"Warning: Missing HLOC for {ticker_prefix} → range features skipped.")
     return df
 
 def calculate_true_range(df_input, ticker_prefix):
@@ -128,18 +134,15 @@ def calculate_true_range(df_input, ticker_prefix):
     pd.DataFrame: DataFrame with an additional True Range column.
     """
     df = df_input.copy()
-    high_col = f'High_{ticker_prefix}'
-    low_col = f'Low_{ticker_prefix}'
-    close_col = f'Close_{ticker_prefix}'
-
-    if all(col in df.columns for col in [high_col, low_col, close_col]):
-        prev_close = df[close_col].shift(1)
-        tr1 = df[high_col] - df[low_col]
-        tr2 = (df[high_col] - prev_close).abs()
-        tr3 = (df[low_col] - prev_close).abs()
+    H, L, C = (f'High_{ticker_prefix}', f'Low_{ticker_prefix}', f'Close_{ticker_prefix}')
+    if _has_cols(df, [H,L,C]):
+        prev_close = df[C].shift(1)
+        tr1 = df[H] - df[L]
+        tr2 = (df[H] - prev_close).abs()
+        tr3 = (df[L] - prev_close).abs()
         df[f'{ticker_prefix}_True_Range'] = np.maximum.reduce([tr1, tr2, tr3])
     else:
-        print(f"Warning: Missing OHLC columns for {ticker_prefix} to calculate True Range.")
+        print(f"Warning: Missing OHLC for {ticker_prefix} → True Range skipped.")
     return df
 
 def calculate_atr(df_input, ticker_prefix, window=14):
@@ -159,23 +162,14 @@ def calculate_atr(df_input, ticker_prefix, window=14):
     pd.DataFrame: A new DataFrame with an additional '{ticker_prefix}_ATR{window}' column.
     """
     df = df_input.copy()
-    #print(f"  - Calculating ATR for {ticker_prefix} (window={window})...")
-
-    true_range_col = f'{ticker_prefix}_True_Range'
-    atr_col_name = f'{ticker_prefix}_ATR{window}'
-
-    if true_range_col in df.columns:
-        # ATR is typically an Exponential Moving Average (EMA) of the True Range.
-        # The .ewm() method in pandas is used for Exponential Weighted Moving Average.
-        # span parameter is equivalent to the window for EMA.
-        df[atr_col_name] = df[true_range_col].ewm(span=window, adjust=False, min_periods=window).mean()
-        # min_periods=window ensures that ATR is only calculated once enough data points are available,
-        # otherwise, the initial values would be based on fewer data points.
+    tr = f'{ticker_prefix}_True_Range'
+    col = f'{ticker_prefix}_ATR{window}'
+    if tr in df.columns:
+        df[col] = df[tr].ewm(span=window, adjust=False, min_periods=window).mean()
     else:
-        print(f"    Warning: '{true_range_col}' column not found in DataFrame for {ticker_prefix}.")
-        print(f"    Please ensure 'calculate_true_range' is run BEFORE 'calculate_atr'. Skipping ATR calculation.")
-        # Fill with NaN if True Range is missing, to maintain column presence
-        df[atr_col_name] = np.nan
+        print(f"Warning: {tr} not found for {ticker_prefix} → ATR skipped.")
+        df[col] = np.nan
+    return df
     
     return df
 
@@ -192,17 +186,14 @@ def add_volume_features(df_input, ticker_prefix, window=20):
     pd.DataFrame: DataFrame with additional volume features.
     """
     df = df_input.copy()
-    volume_col = f'Volume_{ticker_prefix}'
-
-    if volume_col in df.columns:
-        df[f'{ticker_prefix}_Volume_Daily_Change'] = df[volume_col].pct_change() * 100
-        df[f'{ticker_prefix}_Volume_MA_{window}D'] = df[volume_col].rolling(window=window, min_periods=1).mean()
-        
-        # Calculate ratio first, then replace and assign in one step
-        volume_ma_ratio = df[volume_col] / df[f'{ticker_prefix}_Volume_MA_{window}D']
-        df[f'{ticker_prefix}_Volume_MA_Ratio'] = volume_ma_ratio.replace([np.inf, -np.inf], np.nan)
+    V = f'Volume_{ticker_prefix}'
+    if V in df.columns:
+        df[f'{ticker_prefix}_Volume_Daily_Change'] = df[V].pct_change() * 100
+        vma = df[V].rolling(window=window, min_periods=1).mean()
+        df[f'{ticker_prefix}_Volume_MA_{window}D'] = vma
+        df[f'{ticker_prefix}_Volume_MA_Ratio'] = _safe_div(df[V], vma)
     else:
-        print(f"Warning: Volume column '{volume_col}' not found for {ticker_prefix}. Skipping volume features.")
+        print(f"Info: No {V} for {ticker_prefix} → volume features skipped.")
     return df
 
 def calculate_obv(df_input, ticker_prefix):
@@ -217,20 +208,16 @@ def calculate_obv(df_input, ticker_prefix):
     pd.DataFrame: DataFrame with an additional '{ticker_prefix}_OBV' column.
     """
     df = df_input.copy()
-    close_col = f'Close_{ticker_prefix}'
-    volume_col = f'Volume_{ticker_prefix}'
-
-    if all(col in df.columns for col in [close_col, volume_col]):
-        price_direction = np.sign(df[close_col].diff())
-        obv = (price_direction * df[volume_col]).cumsum()
-        
-        # Correctly set the first value using .loc
-        # This avoids the ChainedAssignmentError and SettingWithCopyWarning
-        obv.loc[df.index[0]] = 0 
-        
+    C, V = f'Close_{ticker_prefix}', f'Volume_{ticker_prefix}'
+    if _has_cols(df, [C, V]):
+        price_direction = np.sign(df[C].diff().fillna(0))
+        obv = (price_direction * df[V].fillna(0)).cumsum()
+        # start at 0 deterministically
+        if len(obv):
+            obv.iloc[0] = 0
         df[f'{ticker_prefix}_OBV'] = obv
     else:
-        print(f"Warning: Missing Close or Volume column for {ticker_prefix}. Skipping OBV calculation.")
+        print(f"Info: Missing Close/Volume for {ticker_prefix} → OBV skipped.")
     return df
 
 def calculate_rsi(df_input, ticker_prefix, window=14):
@@ -324,31 +311,19 @@ def add_bollinger_bands(df_input, ticker_prefix, window=20, num_std=2):
     pd.DataFrame: DataFrame with Bollinger Bands added.
     """
     df = df_input.copy()
-    close_col = f'Close_{ticker_prefix}'
-
-    if close_col in df.columns:
-        middle_band = df[close_col].rolling(window=window).mean()
-        std_dev = df[close_col].rolling(window=window).std()
-
-        df[f'{ticker_prefix}_BB_Middle{window}'] = middle_band
-        df[f'{ticker_prefix}_BB_Upper{window}'] = middle_band + (std_dev * num_std)
-        df[f'{ticker_prefix}_BB_Lower{window}'] = middle_band - (std_dev * num_std)
-
-        # Bandwidth: Indicates volatility
-        df[f'{ticker_prefix}_BB_Bandwidth{window}'] = (
-        (df[f'{ticker_prefix}_BB_Upper{window}'] - df[f'{ticker_prefix}_BB_Lower{window}']) /
-        (middle_band + 1e-9)
-    )
-        # %B: Indicates where the price is relative to the bands
-        # Avoid division by zero
-        denom = (df[f'{ticker_prefix}_BB_Upper{window}'] - df[f'{ticker_prefix}_BB_Lower{window}'])
-        
-        # CORRECTED: Calculate the series and then replace inf values before assigning
-        pct_b_series = (df[close_col] - df[f'{ticker_prefix}_BB_Lower{window}']) / denom
-        df[f'{ticker_prefix}_BB_PctB{window}'] = pct_b_series.replace([np.inf, -np.inf], np.nan)
-        
+    C = f'Close_{ticker_prefix}'
+    if C in df.columns:
+        mid = df[C].rolling(window=window, min_periods=window).mean()
+        std = df[C].rolling(window=window, min_periods=window).std()
+        up  = mid + num_std*std
+        lo  = mid - num_std*std
+        df[f'{ticker_prefix}_BB_Middle{window}'] = mid
+        df[f'{ticker_prefix}_BB_Upper{window}']  = up
+        df[f'{ticker_prefix}_BB_Lower{window}']  = lo
+        df[f'{ticker_prefix}_BB_Bandwidth{window}'] = _safe_div(up - lo, mid + EPS)
+        df[f'{ticker_prefix}_BB_PctB{window}']     = _safe_div(df[C] - lo, (up - lo))
     else:
-        print(f"Warning: Close column for {ticker_prefix} not found for Bollinger Bands calculation.")
+        print(f"Warning: {C} missing → Bollinger skipped for {ticker_prefix}.")
     return df
 
 def calculate_stochastic_oscillator(df_input, ticker_prefix, k_period=14, d_period=3):
@@ -365,24 +340,16 @@ def calculate_stochastic_oscillator(df_input, ticker_prefix, k_period=14, d_peri
     pd.DataFrame: DataFrame with additional Stochastic Oscillator features.
     """
     df = df_input.copy()
-    high_col = f'High_{ticker_prefix}'
-    low_col = f'Low_{ticker_prefix}'
-    close_col = f'Close_{ticker_prefix}'
-
-    if all(col in df.columns for col in [high_col, low_col, close_col]):
-        # Calculate %K
-        lowest_low = df[low_col].rolling(window=k_period).min()
-        highest_high = df[high_col].rolling(window=k_period).max()
-        # Avoid division by zero
-        denom = (highest_high - lowest_low)
-        df[f'{ticker_prefix}_Stoch_K_{k_period}'] = ((df[close_col] - lowest_low) / denom) * 100
-        df[f'{ticker_prefix}_Stoch_K_{k_period}'].replace([np.inf, -np.inf], np.nan, inplace=True) # Handle division by zero
-
-        # Calculate %D (SMA of %K)
-        df[f'{ticker_prefix}_Stoch_D_{k_period}_{d_period}'] = df[f'{ticker_prefix}_Stoch_K_{k_period}'].rolling(window=d_period).mean()
+    H, L, C = f'High_{ticker_prefix}', f'Low_{ticker_prefix}', f'Close_{ticker_prefix}'
+    if _has_cols(df, [H,L,C]):
+        low_k  = df[L].rolling(k_period, min_periods=k_period).min()
+        high_k = df[H].rolling(k_period, min_periods=k_period).max()
+        denom  = (high_k - low_k).replace(0, np.nan)
+        k = _safe_div(df[C] - low_k, denom) * 100
+        df[f'{ticker_prefix}_Stoch_K_{k_period}'] = k
+        df[f'{ticker_prefix}_Stoch_D_{k_period}_{d_period}'] = k.rolling(d_period, min_periods=d_period).mean()
     else:
-        print(f"Warning: Missing HLC columns for {ticker_prefix} to calculate Stochastic Oscillator.")
-    
+        print(f"Warning: H/L/C missing → Stoch skipped for {ticker_prefix}.")
     return df
 
 
@@ -400,56 +367,28 @@ def calculate_adx(df_input, ticker_prefix, window=14):
     pd.DataFrame: DataFrame with additional ADX features.
     """
     df = df_input.copy()
-    high_col = f'High_{ticker_prefix}'
-    low_col = f'Low_{ticker_prefix}'
-    close_col = f'Close_{ticker_prefix}'
+    H, L, C = f'High_{ticker_prefix}', f'Low_{ticker_prefix}', f'Close_{ticker_prefix}'
+    if _has_cols(df, [H,L,C]):
+        # ensure TR exists
+        df = calculate_true_range(df, ticker_prefix)
+        tr_ewm = df[f'{ticker_prefix}_True_Range'].ewm(span=window, adjust=False, min_periods=window).mean()
 
-    if all(col in df.columns for col in [high_col, low_col, close_col]):
-        # Calculate Directional Movement (DM)
-        df[f'{ticker_prefix}_PlusDM'] = df[high_col].diff().where(
-            (df[high_col].diff() > df[low_col].diff().abs()) & (df[high_col].diff() > 0), 0
-        )
-        df[f'{ticker_prefix}_MinusDM'] = df[low_col].diff().abs().where(
-            (df[low_col].diff().abs() > df[high_col].diff()) & (df[low_col].diff() < 0), 0
-        )
-        # Handle cases where current high is lower than prev high and current low is higher than prev low
-        # We need to ensure that the +DM is 0 if it's not an "up" move, and -DM is 0 if it's not a "down" move.
-        # This is more complex than simple diffs. A common way is to compare current high/low to prev high/low.
-        # This is a simplified version. A more robust ADX calculation often involves EMA smoothing of DM.
+        up_move   = df[H].diff()
+        down_move = -df[L].diff()
+        plusDM  = up_move.where((up_move > down_move) & (up_move > 0), 0)
+        minusDM = down_move.where((down_move > up_move) & (down_move > 0), 0)
 
-        # Calculate True Range (TR) - assumes calculate_true_range was run before this
-        df = calculate_true_range(df, ticker_prefix) # Ensure TR exists
+        plusDI  = _safe_div(plusDM.ewm(span=window, adjust=False).mean(), tr_ewm) * 100
+        minusDI = _safe_div(minusDM.ewm(span=window, adjust=False).mean(), tr_ewm) * 100
+        df[f'{ticker_prefix}_PlusDI_{window}']  = plusDI
+        df[f'{ticker_prefix}_MinusDI_{window}'] = minusDI
 
-        # Smooth DM and TR
-        # Using 14-period Wilder's smoothing (equivalent to EMA with adjust=False for (window*2)-1)
-        df[f'{ticker_prefix}_PlusDI_{window}'] = (
-            df[f'{ticker_prefix}_PlusDM'].ewm(span=window, adjust=False).mean() /
-            df[f'{ticker_prefix}_True_Range'].ewm(span=window, adjust=False).mean()
-        ) * 100
-
-        df[f'{ticker_prefix}_MinusDI_{window}'] = (
-            df[f'{ticker_prefix}_MinusDM'].ewm(span=window, adjust=False).mean() /
-            df[f'{ticker_prefix}_True_Range'].ewm(span=window, adjust=False).mean()
-        ) * 100
-
-        # Calculate DX
-        df[f'{ticker_prefix}_DI_Diff'] = abs(df[f'{ticker_prefix}_PlusDI_{window}'] - df[f'{ticker_prefix}_MinusDI_{window}'])
-        df[f'{ticker_prefix}_DI_Sum'] = df[f'{ticker_prefix}_PlusDI_{window}'] + df[f'{ticker_prefix}_MinusDI_{window}']
-        # Avoid division by zero
-        denom_dx = df[f'{ticker_prefix}_DI_Sum']
-        df[f'{ticker_prefix}_DX_{window}'] = (df[f'{ticker_prefix}_DI_Diff'] / denom_dx) * 100
-        df[f'{ticker_prefix}_DX_{window}'].replace([np.inf, -np.inf], np.nan, inplace=True) # Replace inf with NaN
-        df[f'{ticker_prefix}_DX_{window}'].fillna(0, inplace=True) # If sum is 0, DX is 0
-
-        # Calculate ADX (smoothed DX)
+        di_sum  = (plusDI + minusDI).replace(0, np.nan)
+        dx      = _safe_div((plusDI - minusDI).abs(), di_sum) * 100
+        df[f'{ticker_prefix}_DX_{window}']  = dx.fillna(0)
         df[f'{ticker_prefix}_ADX_{window}'] = df[f'{ticker_prefix}_DX_{window}'].ewm(span=window, adjust=False).mean()
-
-        # Drop intermediate columns if desired (e.g., PlusDM, MinusDM, DI_Diff, DI_Sum)
-        df.drop(columns=[f'{ticker_prefix}_PlusDM', f'{ticker_prefix}_MinusDM',
-                         f'{ticker_prefix}_DI_Diff', f'{ticker_prefix}_DI_Sum'],
-                errors='ignore', inplace=True)
     else:
-        print(f"Warning: Missing OHLC/Close column for {ticker_prefix} to calculate ADX.")
+        print(f"Warning: H/L/C missing → ADX skipped for {ticker_prefix}.")
     return df
 
 def calculate_macd(df_input, ticker_prefix, fast_period=12, slow_period=26, signal_period=9):
@@ -513,13 +452,13 @@ def add_relative_strength(df, stock_ticker, benchmark_ticker='^GSPC'):
     Calculates the relative strength of a stock against a benchmark index.
     A higher value indicates the stock is outperforming the benchmark.
     """
-    # Calculate daily returns for both the stock and the benchmark
-    stock_returns = df[f'Close_{stock_ticker}'].pct_change()
-    benchmark_returns = df[f'Close_{benchmark_ticker}'].pct_change()
-    
-    # Calculate relative strength as the ratio of their returns
-    # Add a small value to the denominator to avoid division by zero
-    df[f'{stock_ticker}_vs_{benchmark_ticker}_RelStrength'] = stock_returns / (benchmark_returns + 1e-9)
+    s = df.get(f'Close_{stock_ticker}')
+    b = df.get(f'Close_{benchmark_ticker}')
+    if s is None or b is None:
+        return df
+    sr = s.pct_change()
+    br = b.pct_change()
+    df[f'{stock_ticker}_vs_{benchmark_ticker}_RelStrength'] = _safe_div(sr, (br + EPS))
     return df
 
 def add_interstock_ratios(df, target_ticker, supplier_tickers):
@@ -527,8 +466,12 @@ def add_interstock_ratios(df, target_ticker, supplier_tickers):
     Calculates the price ratio of a target stock to its suppliers.
     This can indicate potential supply chain health or sentiment shifts.
     """
-    for supplier_ticker in supplier_tickers:
-        df[f'{target_ticker}_vs_{supplier_ticker}_CloseRatio'] = df[f'Close_{target_ticker}'] / df[f'Close_{supplier_ticker}']
+    for sup in supplier_tickers:
+        a = df.get(f'Close_{target_ticker}')
+        b = df.get(f'Close_{sup}')
+        if a is None or b is None: 
+            continue
+        df[f'{target_ticker}_vs_{sup}_CloseRatio'] = _safe_div(a, b + EPS)
     return df
 
 def add_volatility_ratios(df, stock_ticker, benchmark_ticker='^GSPC'):
@@ -536,8 +479,11 @@ def add_volatility_ratios(df, stock_ticker, benchmark_ticker='^GSPC'):
     Calculates the ratio of a stock's volatility (ATR) to the benchmark's volatility.
     A high ratio indicates the stock is more volatile than the market.
     """
-    # Calculate volatility ratio as the ratio of their ATRs
-    df[f'{stock_ticker}_vs_{benchmark_ticker}_ATR_Ratio'] = df[f'{stock_ticker}_ATR14'] / df[f'{benchmark_ticker}_ATR14']
+    s = df.get(f'{stock_ticker}_ATR14')
+    b = df.get(f'{benchmark_ticker}_ATR14')
+    if s is None or b is None:
+        return df
+    df[f'{stock_ticker}_vs_{benchmark_ticker}_ATR_Ratio'] = _safe_div(s, b + EPS)
     return df
 
 def add_volume_ratios(df, stock_ticker, benchmark_ticker='^GSPC'):
@@ -545,7 +491,7 @@ def add_volume_ratios(df, stock_ticker, benchmark_ticker='^GSPC'):
     v_b = df.get(f'Volume_{benchmark_ticker}')
     if v_s is None or v_b is None:
         return df
-    df[f'{stock_ticker}_vs_{benchmark_ticker}_VolumeRatio'] = v_s / (v_b + 1e-9)
+    df[f'{stock_ticker}_vs_{benchmark_ticker}_VolumeRatio'] = _safe_div(v_s, v_b + EPS)
     return df
 
 def add_volume_volatility_interaction(df, stock_ticker):
@@ -554,7 +500,11 @@ def add_volume_volatility_interaction(df, stock_ticker):
     High values can signal high-conviction moves (large volume on volatile days).
     We use the ATR as a measure of volatility.
     """
-    df[f'{stock_ticker}_Volume_x_ATR'] = df[f'Volume_{stock_ticker}'] * df[f'{stock_ticker}_ATR14']
+    v = df.get(f'Volume_{stock_ticker}')
+    a = df.get(f'{stock_ticker}_ATR14')
+    if v is None or a is None:
+        return df
+    df[f'{stock_ticker}_Volume_x_ATR'] = v * a
     return df
 
 def add_cross_stock_lagged_correlations(df, target_ticker, source_ticker, window=5):
@@ -676,30 +626,18 @@ def calculate_mfi(df, ticker, window=14):
     Calculates the Money Flow Index (MFI) for a given ticker.
     MFI combines price and volume to measure buying and selling pressure.
     """
-    high_col = f'High_{ticker}'
-    low_col = f'Low_{ticker}'
-    close_col = f'Close_{ticker}'
-    volume_col = f'Volume_{ticker}'
-    mfi_col = f'{ticker}_MFI_{window}'
-    
-    # Step 1: Calculate Typical Price
-    typical_price = (df[high_col] + df[low_col] + df[close_col]) / 3
-    
-    # Step 2: Calculate Raw Money Flow
-    money_flow = typical_price * df[volume_col]
-    
-    # Step 3: Differentiate Positive and Negative Money Flow
-    positive_mf = money_flow.where(typical_price > typical_price.shift(1), 0)
-    negative_mf = money_flow.where(typical_price < typical_price.shift(1), 0)
-    
-    # Step 4: Calculate Positive and Negative Money Flow over 'window' periods
-    pos_mf_sum = positive_mf.rolling(window=window).sum()
-    neg_mf_sum = negative_mf.rolling(window=window).sum()
-    
-    # Step 5: Calculate Money Flow Ratio and MFI
-    money_flow_ratio = pos_mf_sum / neg_mf_sum
-    df[mfi_col] = 100 - (100 / (1 + money_flow_ratio))
-    
+    H,L,C,V = f'High_{ticker}', f'Low_{ticker}', f'Close_{ticker}', f'Volume_{ticker}'
+    col = f'{ticker}_MFI_{window}'
+    if not _has_cols(df, [H,L,C]) or not _has_volume(df, ticker):
+        return df
+    tp  = (df[H] + df[L] + df[C]) / 3.0
+    mf  = tp * df[V]
+    pos = mf.where(tp > tp.shift(1), 0)
+    neg = mf.where(tp < tp.shift(1), 0)
+    pos_sum = pos.rolling(window, min_periods=window).sum()
+    neg_sum = neg.rolling(window, min_periods=window).sum().replace(0, np.nan)
+    ratio = _safe_div(pos_sum, neg_sum)
+    df[col] = 100 - (100 / (1 + ratio))
     return df
 
 def calculate_cmf(df, ticker, window=21):
@@ -707,22 +645,16 @@ def calculate_cmf(df, ticker, window=21):
     Calculates the Chaikin Money Flow (CMF) for a given ticker.
     CMF measures the amount of money flow over a period.
     """
-    high_col = f'High_{ticker}'
-    low_col = f'Low_{ticker}'
-    close_col = f'Close_{ticker}'
-    volume_col = f'Volume_{ticker}'
-    cmf_col = f'{ticker}_CMF_{window}'
-
-    # Step 1: Calculate Money Flow Multiplier (MFM)
-    mfm = ((df[close_col] - df[low_col]) - (df[high_col] - df[close_col])) / (df[high_col] - df[low_col])
-    
-    # Step 2: Calculate Money Flow Volume (MFV)
-    mfv = mfm * df[volume_col]
-    
-    # Step 3: Calculate CMF
-    cmf = mfv.rolling(window=window).sum() / df[volume_col].rolling(window=window).sum()
-    df[cmf_col] = cmf
-    
+    H,L,C,V = f'High_{ticker}', f'Low_{ticker}', f'Close_{ticker}', f'Volume_{ticker}'
+    col = f'{ticker}_CMF_{window}'
+    if not _has_cols(df, [H,L,C]) or not _has_volume(df, ticker):
+        return df
+    range_ = (df[H] - df[L]).replace(0, np.nan)
+    mfm = _safe_div((df[C] - df[L]) - (df[H] - df[C]), range_)
+    mfv = mfm * df[V]
+    num = mfv.rolling(window, min_periods=window).sum()
+    den = df[V].rolling(window, min_periods=window).sum().replace(0, np.nan)
+    df[col] = _safe_div(num, den)
     return df
 
 def _first_existing(df, names):
@@ -741,14 +673,11 @@ def add_feature_interactions(df, prefix):
 
     if rsi and volr:
         df[f'{prefix}_RSI_Vol_Interaction'] = df[rsi] * df[volr]
-
     if macdl and close in df.columns:
-        df[f'{prefix}_MACD_Close_Ratio'] = df[macdl] / (df[close] + 1e-9)
-
+        df[f'{prefix}_MACD_Close_Ratio'] = _safe_div(df[macdl], df[close] + EPS)
     if upper and lower and rsi and close in df.columns:
-        bb_ratio = (df[close] - df[lower]) / (df[upper] - df[lower] + 1e-9)
+        bb_ratio = _safe_div(df[close] - df[lower], (df[upper] - df[lower] + EPS))
         df[f'{prefix}_BB_RSI_Interaction'] = bb_ratio * df[rsi]
-
     if macdl and volr:
         df[f'{prefix}_MACD_Vol_Interaction'] = df[macdl] * df[volr]
 
@@ -857,22 +786,26 @@ def sector_and_market_relatives(df, target_ticker, sector_etf=None, market_bench
 
 def add_volume_shock(df, prefix, long_win=60, short_win=5):
     v = df.get(f'Volume_{prefix}')
-    if v is None: return df
-    mu = v.rolling(long_win).mean()
-    sd = v.rolling(long_win).std()
-    df[f'{prefix}_vol_z_{long_win}'] = (v - mu) / (sd + 1e-9)
-    df[f'{prefix}_vol_ma_ratio_{short_win}_{long_win}'] = v.rolling(short_win).mean() / (mu + 1e-9)
+    if v is None: 
+        return df
+    mu = v.rolling(long_win, min_periods=long_win).mean()
+    sd = v.rolling(long_win, min_periods=long_win).std()
+    df[f'{prefix}_vol_z_{long_win}'] = _safe_div(v - mu, sd + EPS)
+    df[f'{prefix}_vol_ma_ratio_{short_win}_{long_win}'] = _safe_div(v.rolling(short_win).mean(), mu + EPS)
     return df
 
 def add_gap_features(df, prefix):
     o, c = df.get(f'Open_{prefix}'), df.get(f'Close_{prefix}')
-    if o is None or c is None: return df
+    if o is None or c is None: 
+        return df
     prev_c = c.shift(1)
-    gap = (o - prev_c) / (prev_c + 1e-9)
+    gap = _safe_div(o - prev_c, (prev_c + EPS))
     df[f'{prefix}_gap_overnight'] = gap
     atr = df.get(f'{prefix}_ATR14')
+    atr = df.get(f'{prefix}_ATR14') if atr is None else atr  # guard typo
+    atr = df.get(f'{prefix}_ATR14')
     if atr is not None:
-        df[f'{prefix}_gap_vs_ATR'] = gap.abs() / (atr / (prev_c + 1e-9) + 1e-9)
+        df[f'{prefix}_gap_vs_ATR'] = (gap.abs()) / (_safe_div(atr, (prev_c + EPS)) + EPS)
     return df
 
 def add_drawdown_features(df, prefix, window=252):
@@ -1021,4 +954,107 @@ def build_stock_features_orchestrator(
     return df
 
 
+def base_sector_and_market_relatives(df, target_ticker, sector_etf=None, market_bench="^GSPC"):
+    """Rel-strength & rolling beta vs sector ETF and market (if present)."""
+    if sector_etf and f'Close_{sector_etf}' in df.columns and f'Close_{target_ticker}' in df.columns:
+        df = add_relative_strength(df, target_ticker, sector_etf)
+        df = add_rolling_beta(df, target_ticker, sector_etf, window=60)
+    if market_bench and f'Close_{market_bench}' in df.columns and f'Close_{target_ticker}' in df.columns:
+        df = add_relative_strength(df, target_ticker, market_bench)
+        df = add_rolling_beta(df, target_ticker, market_bench, window=60)
+    return df
+
+
+def build_sector_base_features(
+    tickers,
+    start_date=None,
+    end_date=None,
+    kalman_lags=None,
+    dropna_frac=0.90,
+    output_path=None
+):
+    """Fetch + compute all per-ticker features ONCE for a sector (no target logic)."""
+    print("\n--- Building sector BASE (target-agnostic) ---")
+    df = fetch_multiple_stock_data(tickers, start_date=start_date, end_date=end_date)
+    if df.empty:
+        print("No data fetched."); return pd.DataFrame()
+
+    prefixes = sorted({col.split('_')[1] for col in df.columns if '_' in col})
+    print(f"Discovered prefixes: {prefixes}")
+
+    # per-ticker features (heavy)
+    for p in prefixes:
+        df = add_event_time_features(df, p)
+        df = add_price_range_features(df, p)
+        df = calculate_true_range(df, p)
+        df = calculate_atr(df, p, window=14)
+        df = add_volume_features(df, p, window=20)
+        df = calculate_obv(df, p)
+        df = calculate_rsi(df, p, window=14)
+        df = calculate_macd(df, p, fast_period=12, slow_period=26, signal_period=9)
+        df = add_moving_averages(df, p, window_sizes=[10,20,50], ma_type='SMA')
+        df = add_moving_averages(df, p, window_sizes=[12,26], ma_type='EMA')
+        df = add_bollinger_bands(df, p, window=20, num_std=2)
+        df = calculate_stochastic_oscillator(df, p, k_period=14, d_period=3)
+        df = calculate_adx(df, p, window=14)
+        df = add_rolling_mean_convergence(df, [p], window=50)
+        df = calculate_roc(df, p, window=12)
+        df = calculate_mfi(df, p, window=14)
+        df = calculate_cmf(df, p, window=21)
+        df = add_feature_interactions(df, p)
+        df = add_volume_shock(df, p)
+        df = add_gap_features(df, p)
+        df = add_drawdown_features(df, p, window=252)
+        df = add_streak_features(df, p)
+        df = add_range_volatility(df, p, window=20)
+        df = add_rolling_autocorr(df, p, window=20, lag=1)
+
+    # daily returns for all Close_*
+    close_cols = [c for c in df.columns if c.startswith("Close_")]
+    df = calculate_daily_returns(df, close_cols)
+
+    # optional Kalman for all tickers (cheap once)
+    if kalman_lags:
+        df = apply_kalman_filter_with_lag(df, target_tickers=prefixes, lags=kalman_lags)
+
+    # prune rows
+    min_non_na = int(dropna_frac * df.shape[1])
+    before = len(df)
+    df = df.dropna(thresh=min_non_na)
+    print(f"Dropped {before - len(df)} rows (base pruning @ {dropna_frac:.0%}).")
+
+    if output_path:
+        # parquet recommended for speed + schema
+        if str(output_path).lower().endswith(".parquet"):
+            df.to_parquet(output_path)
+        else:
+            df.to_csv(output_path, index=True)
+        print(f"Saved BASE → {output_path}")
+
+    return df
+
+
+def make_target_view(
+    base_df, target_ticker, supplier_tickers, benchmark_ticker="^GSPC", sector_etf=None
+):
+    """Add only the target-specific, cross-ticker features on top of a sector BASE."""
+    df = base_df.copy()
+
+    # target vs market + sector
+    df = add_relative_strength(df, target_ticker, benchmark_ticker)
+    df = add_volatility_ratios(df, target_ticker, benchmark_ticker)
+    df = add_volume_ratios(df, target_ticker, benchmark_ticker)
+    df = add_volume_volatility_interaction(df, target_ticker)
+    df = base_sector_and_market_relatives(df, target_ticker, sector_etf=sector_etf, market_bench=benchmark_ticker)
+
+    # target vs suppliers (light)
+    df = add_interstock_ratios(df, target_ticker, supplier_tickers)
+    for sup in supplier_tickers:
+        df = add_cross_stock_lagged_correlations(df, target_ticker, sup)
+
+    # optional fixed intermarket spread you had
+    if f'Close_{target_ticker}' in df.columns and 'Close_KO' in df.columns:
+        df = add_intermarket_spread(df, target_ticker, 'KO')
+
+    return df
 

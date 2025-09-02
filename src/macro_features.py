@@ -147,59 +147,44 @@ def macro_data_orchestrator(macro_funcs_to_fetch: list, fred_series_ids_dict: di
     print("Data orchestration complete.")
     return final_df.sort_index()
 
-# def fetch_macro_data_orchestrator(
-#     target_stock: str,
-#     fundamental_funcs_to_fetch: list,
-#     macro_funcs_to_fetch: list
-# ) -> pd.DataFrame:
-#     """
-#     Orchestrates the fetching, cleaning, and merging of all macroeconomic and
-#     fundamental data into a single, time-series-ready DataFrame.
-#     """
-#     print("Starting data orchestration pipeline...")
-#     final_df = pd.DataFrame()
+def normalize_date_col(df, col="Date"):
+    # unify column name and type (naive, normalized midnight)
+    if col not in df.columns:
+        # common alternates
+        for c in ["date", "DATE", "Date"]:
+            if c in df.columns: 
+                df = df.rename(columns={c: "Date"})
+                break
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    # drop tz if present and normalize to midnight
+    if pd.api.types.is_datetime64tz_dtype(df["Date"]):
+        df["Date"] = df["Date"].dt.tz_convert(None)
+    df["Date"] = df["Date"].dt.normalize()
+    return df
 
-#     # --- Step 1: Fetch and Merge Fundamental Data ---
-#     print("Fetching and processing fundamental data...")
-#     fundamental_dfs = []
-#     for func_name in fundamental_funcs_to_fetch:
-#         raw_df = fetch_fundamental_data(func_name, symbol=target_stock)
-#         if not raw_df.empty:
-#             # Use .copy() to avoid SettingWithCopyWarning
-#             df = raw_df.copy()
-#             # Convert non-currency columns to numeric types
-#             cols_to_convert = [col for col in df.columns if col != 'reportedCurrency']
-#             for col in cols_to_convert:
-#                 df[col] = pd.to_numeric(df[col], errors='coerce')
-            
-#             fundamental_dfs.append(df)
+def prepare_macro_for_daily_merge(macro_df):
+    macro_df = normalize_date_col(macro_df, "Date")
+    macro_df = macro_df.sort_values("Date").drop_duplicates("Date")
 
-#     if fundamental_dfs:
-#         merged_fundamental_df = pd.concat(fundamental_dfs, axis=1, join='outer')
-#         processed_fundamental_df = fundamental_metrics(merged_fundamental_df)
-#         if 'reportedCurrency' in processed_fundamental_df.columns:
-#             processed_fundamental_df = processed_fundamental_df.drop(columns=['reportedCurrency'])
-#         processed_fundamental_df = processed_fundamental_df.asfreq('D').ffill()
-#         final_df = processed_fundamental_df
+    # If macro isn’t already daily, resample to business days with forward fill
+    # (detect by median spacing > 2 days)
+    if macro_df["Date"].diff().median() > pd.Timedelta(days=2):
+        macro_df = (macro_df
+                    .set_index("Date")
+                    .resample("B")   # business days
+                    .ffill()
+                    .reset_index())
+    return macro_df
 
+def merge_stocks_and_macros(stock_df, macro_df, tolerance_days=31):
+    stock_df = normalize_date_col(stock_df, "Date").sort_values("Date")
+    macro_df = prepare_macro_for_daily_merge(macro_df).sort_values("Date")
 
-#     # --- Step 2: Fetch and Merge General Macro Data ---
-#     print("Fetching and processing general macroeconomic data...")
-#     for func_name in macro_funcs_to_fetch:
-#         macro_df = fetch_general_macro_data(func_name)
-#         if not macro_df.empty:
-#             macro_df = macro_df.asfreq('D').ffill()
-#             if final_df.empty:
-#                 final_df = macro_df
-#             else:
-#                 # Use outer join to keep all dates from both dataframes
-#                 final_df = final_df.merge(macro_df, left_index=True, right_index=True, how='outer')
-
-#     # --- Step 3: Remove rows that are all NaN ---
-#     # This is the key fix to clean up the DataFrame.
-#     if not final_df.empty:
-#         final_df.dropna(how='all', inplace=True)
-
-#     print("Data orchestration complete.")
-#     return final_df.sort_index()
-
+    # asof merge: each stock day gets the most recent macro reading at/before it
+    merged = pd.merge_asof(
+        stock_df, macro_df,
+        on="Date",
+        direction="backward",
+        tolerance=pd.Timedelta(days=tolerance_days)
+    )
+    return merged
