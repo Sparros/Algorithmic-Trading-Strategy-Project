@@ -1,7 +1,11 @@
 import numpy as np
 import pandas as pd
+
 from pykalman import KalmanFilter
-from todo.stock_data import fetch_multiple_stock_data
+
+import os, sys
+sys.path.append(os.path.abspath(os.path.join(os.getcwd(), '..')))
+from src.stock_data import fetch_multiple_stock_data
 
 EPS = 1e-9
 

@@ -4,10 +4,10 @@
 /catboost_info/
 /data/
 /models/
-/notebooks/catboost_info/
+/notebook/catboost_info/
 
 src/config.py
-notebooks/testing.ipynb
-/notebooks/old/
+/notebook/old/
 triage_fine.ipynb
 src/todo/
+/notebooks

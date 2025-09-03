@@ -1,14 +1,16 @@
 import requests
 import pandas as pd
+
 import time
 import os
 from pytrends.request import TrendReq
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from typing import Optional, Sequence, Dict
+from pandas.tseries.offsets import BDay
 
 EPS = 1e-12
 
@@ -102,47 +104,126 @@ def fetch_google_trends(
         print(f"Error fetching Google Trends data: {e}")
         return pd.DataFrame()
 
-def normalize_date_col(df, col="Date"):
-    # unify column name and type (naive, normalized midnight)
-    if col not in df.columns:
-        # common alternates
-        for c in ["date", "DATE", "Date"]:
-            if c in df.columns: 
-                df = df.rename(columns={c: "Date"})
-                break
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    # drop tz if present and normalize to midnight
-    if pd.api.types.is_datetime64tz_dtype(df["Date"]):
-        df["Date"] = df["Date"].dt.tz_convert(None)
-    df["Date"] = df["Date"].dt.normalize()
-    return df
+def normalize_date_index(df: pd.DataFrame, col: str = "Date") -> pd.DataFrame:
+    """
+    Ensure df has a tz-naive, midnight-normalized DatetimeIndex.
+    Accepts a date column (any of ['Date','date','DATE']) or a datetime-like index.
+    Returns df with the date set as the index; drops the date column if present.
+    """
+    out = df.copy()
 
-def prepare_macro_for_daily_merge(macro_df):
-    macro_df = normalize_date_col(macro_df, "Date")
-    macro_df = macro_df.sort_values("Date").drop_duplicates("Date")
+    # Try to find a date column
+    candidates = [col, "date", "Date", "DATE"]
+    found = next((c for c in candidates if c in out.columns), None)
 
-    # If macro isn’t already daily, resample to business days with forward fill
-    # (detect by median spacing > 2 days)
-    if macro_df["Date"].diff().median() > pd.Timedelta(days=2):
-        macro_df = (macro_df
-                    .set_index("Date")
-                    .resample("B")   # business days
-                    .ffill()
-                    .reset_index())
-    return macro_df
+    if found is not None:
+        # Parse column to datetime
+        out[found] = pd.to_datetime(out[found], errors="coerce", utc=False)
+        # If tz-aware, strip tz
+        if pd.api.types.is_datetime64tz_dtype(out[found]):
+            out[found] = out[found].dt.tz_convert(None)
+        # Normalize to midnight and set as index
+        out[found] = out[found].dt.normalize()
+        out = out.set_index(found)
+        # Optional: give the index a consistent name
+        out.index.name = "date"
+        return out
 
-def merge_stocks_and_macros(stock_df, macro_df, tolerance_days=31):
-    stock_df = normalize_date_col(stock_df, "Date").sort_values("Date")
-    macro_df = prepare_macro_for_daily_merge(macro_df).sort_values("Date")
+    # No date column—try to use the index
+    idx = out.index
+    # If it’s not datetime already, try to parse it
+    if not pd.api.types.is_datetime64_any_dtype(idx):
+        try:
+            idx = pd.to_datetime(idx, errors="coerce", utc=False)
+        except Exception:
+            pass
 
-    # asof merge: each stock day gets the most recent macro reading at/before it
+    if pd.api.types.is_datetime64_any_dtype(idx):
+        # Strip tz if needed and normalize
+        if pd.api.types.is_datetime64tz_dtype(idx):
+            idx = idx.tz_convert(None)
+        out.index = idx.normalize()
+        out.index.name = "date"
+        return out
+
+    # Still no luck—raise a clear error
+    raise KeyError(
+        "No date column or datetime-like index found. "
+        f"Columns present: {list(out.columns)[:10]}{'...' if len(out.columns)>10 else ''}"
+    )
+
+
+def apply_publish_lags(df: pd.DataFrame, lags: dict, date_col: str = "Date") -> pd.DataFrame:
+    """
+    Shift selected macro columns forward by N business days to mimic post-release availability.
+    lags: { column_name: business_days_to_delay }
+    Works with either a 'Date' column or a DatetimeIndex. Returns the same layout it received.
+    """
+    out = df.copy()
+
+    # Standardize to DatetimeIndex for shifting
+    had_date_col = date_col in out.columns
+    if had_date_col:
+        out[date_col] = pd.to_datetime(out[date_col]).dt.normalize()
+        out = out.set_index(date_col)
+    else:
+        out.index = pd.to_datetime(out.index).tz_localize(None).normalize()
+
+    for col, bdays in (lags or {}).items():
+        if col in out.columns and pd.notna(bdays) and int(bdays) != 0:
+            out[col] = out[col].shift(freq=BDay(int(bdays)))   # <-- key fix
+
+    out = out.sort_index()
+
+    # restore original layout
+    if had_date_col:
+        return out.reset_index().rename(columns={"index": date_col})
+    return out
+
+def prepare_macro_for_daily_merge(macro_df: pd.DataFrame) -> pd.DataFrame:
+    # Ensure we have a DatetimeIndex (named 'date')
+    df = normalize_date_index(macro_df)
+
+    # Drop any stray 'Date' column; index is canonical
+    if "Date" in df.columns:
+        df = df.drop(columns="Date")
+
+    # De-dup and sort
+    df = df[~df.index.duplicated(keep="last")].sort_index()
+
+    # If not already daily-ish, resample to business days and ffill
+    median_gap = df.index.to_series().diff().median()
+    if pd.isna(median_gap) or median_gap > pd.Timedelta(days=2):
+        df = df.resample("B").ffill()
+
+    # merge_asof needs a column, not an index -> return with 'Date' column
+    return df.reset_index().rename(columns={"date": "Date"})
+
+def merge_stocks_and_macros(stock_df: pd.DataFrame,
+                            macro_df: pd.DataFrame,
+                            tolerance_days: int = 31) -> pd.DataFrame:
+    """As-of merge on a 'Date' column; macro_df can be index- or column-dated."""
+    a = stock_df.copy()
+    if "Date" not in a.columns:
+        a = a.reset_index().rename(columns={a.index.name or "index": "Date"})
+    a["Date"] = pd.to_datetime(a["Date"]).dt.normalize()
+
+    # macro: if it already has 'Date', just normalize; otherwise prep it
+    if "Date" in macro_df.columns:
+        b = macro_df.copy()
+        b["Date"] = pd.to_datetime(b["Date"]).dt.normalize()
+    else:
+        b = prepare_macro_for_daily_merge(macro_df)  # returns with 'Date' column
+
     merged = pd.merge_asof(
-        stock_df, macro_df,
+        a.sort_values("Date"),
+        b.sort_values("Date"),
         on="Date",
         direction="backward",
-        tolerance=pd.Timedelta(days=tolerance_days)
+        tolerance=pd.Timedelta(days=tolerance_days),
     )
     return merged
+
 
 def add_yield_curve_moments(macro_daily: pd.DataFrame,
                             tenors: Dict[str,str] = None) -> pd.DataFrame:
@@ -177,66 +258,51 @@ def add_yield_curve_moments(macro_daily: pd.DataFrame,
 
     return df
 
-def add_macro_pca_kmeans_regimes(macro_daily: pd.DataFrame,
-                                 cols: Optional[Sequence[str]] = None,
-                                 n_components: int = 5,
-                                 n_clusters: int = 3,
-                                 lookback: int = 252) -> pd.DataFrame:
+def add_pca_kmeans_monthly(
+    df_monthly: pd.DataFrame,
+    cols: Optional[Sequence[str]] = None,
+    n_components: int = 5,
+    n_clusters: int = 3,
+    train_end: Optional[pd.Timestamp] = None,  # e.g., pd.Timestamp("2015-12-31")
+) -> Tuple[pd.DataFrame, PCA, KMeans, pd.Series, pd.Series]:
     """
-    Rolling PCA on macro columns, then assign regimes via k-means on the
-    current PCA coordinates using only information available up to t-1.
-    Outputs:
-      - MACRO_PC1..PCk
-      - MACRO_Regime (0..k-1)
+    Fit PCA and KMeans on a fixed training window (monthly data), then
+    transform and classify the entire sample using those fixed parameters.
+    Returns (df_with_features, pca, kmeans, mu, sd).
     """
-    df = macro_daily.copy()
+    df = df_monthly.copy()
     if cols is None:
-        # numeric macro cols
-        cols = [c for c in df.columns if c != "Date" and pd.api.types.is_numeric_dtype(df[c])]
-    if len(cols) == 0:
-        return df
+        cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+    # expanding z-scores computed without leakage
+    mu = df[cols].expanding().mean().shift(1)
+    sd = df[cols].expanding().std().shift(1).replace(0, np.nan)
+    Z = (df[cols] - mu) / sd
 
-    pcs = [f"MACRO_PC{i+1}" for i in range(n_components)]
-    for p in pcs:
-        df[p] = np.nan
-    df["MACRO_Regime"] = np.nan
+    # split train / full matrices
+    if train_end is None:
+        # use first 70% as train if not provided
+        train_end = df.index[int(len(df)*0.7)]
+    train_mask = df.index <= train_end
+    Z_train = Z.loc[train_mask].dropna(how="any")
 
-    # rolling expanding window (min 2*lookback to get stable PCs)
-    for t in range(len(df)):
-        end = t  # up to t-1 for as-of (we will fill PCs at t using data <= t-1)
-        if end < 1:
-            continue
-        start = max(0, end - lookback)
-        hist = df.iloc[start:end]  # NOT including row t
-        X = hist[cols].astype(float).dropna(how="any")
-        if len(X) < max(60, n_components*20):
-            continue
-        # standardize within history window
-        mu = X.mean(axis=0)
-        sd = X.std(axis=0).replace(0, np.nan)
-        Xz = (X - mu) / sd
+    # if not enough data, bail gracefully
+    if len(Z_train) < max(60, n_components*20):
+        return df, None, None, None, None
 
-        pca = PCA(n_components=n_components, random_state=0)
-        Z = pca.fit_transform(Xz)
+    pca = PCA(n_components=n_components, random_state=0).fit(Z_train.values)
+    PCs = pca.transform(Z.values)  # will be nan where Z has nans
 
-        # assign clusters on history and then transform current (t) with those params
-        km = KMeans(n_clusters=n_clusters, n_init="auto", random_state=0)
-        km.fit(Z)
+    km = KMeans(n_clusters=n_clusters, n_init=20, random_state=0).fit(PCs[train_mask & Z.notna().all(1)])
+    regime = np.full(len(df), np.nan)
+    valid_rows = Z.notna().all(1).values
+    regime[valid_rows] = km.predict(PCs[valid_rows])
 
-        # now transform the current row (t) using history mu/sd/pca
-        x_t = df.iloc[[t]][cols].astype(float)
-        if x_t.isna().any(axis=1).iloc[0]:
-            continue
-        x_tz = (x_t - mu) / sd
-        x_tz = x_tz.fillna(0.0)
-        z_t = pca.transform(x_tz)
-        r_t = km.predict(z_t)[0]
+    # attach features
+    for i in range(n_components):
+        df[f"MACRO_PC{i+1}"] = PCs[:, i]
+    df["MACRO_Regime"] = regime.astype("float")  # may include nans
 
-        for i, name in enumerate(pcs):
-            df.iat[t, df.columns.get_loc(name)] = float(z_t[0, i])
-        df.iat[t, df.columns.get_loc("MACRO_Regime")] = int(r_t)
-
-    return df
+    return df, pca, km, mu.iloc[-1], sd.iloc[-1]
 
 def add_risk_appetite_proxies(macro_daily: pd.DataFrame,
                               spread_cols: Optional[Dict[str,str]] = None) -> pd.DataFrame:
@@ -304,72 +370,220 @@ def attach_macro_surprises(macro_daily: pd.DataFrame,
     )
     return merged
 
-def macro_data_orchestrator(macro_funcs_to_fetch: list, fred_series_ids_dict: dict, start_date: str = None, save_path = None) -> pd.DataFrame:
+def add_simple_regimes(df_m: pd.DataFrame) -> pd.DataFrame:
     """
-    Orchestrates the fetching, cleaning, and merging of all macroeconomic 
-    data into a single, time-series-ready DataFrame using the FRED API.
+    Defines a compact, interpretable regime label from macro features.
+    Encodes three dimensions: Growth (up/down), Inflation (high/low), Risk (on/off).
+    """
+    out = df_m.copy()
+
+    growth_up = out.get("PAYEMS_YoY_z")
+    infl_hi   = out.get("CPI_YoY_z")
+    vix_pct   = out.get("VIX_pctile")
+    hy_z      = out.get("HY_OAS_z")
+    ig_z      = out.get("IG_OAS_z")
+
+    # Booleans with conservative thresholds
+    grow_up = growth_up > 0 if growth_up is not None else pd.Series(False, index=out.index)
+    infl_hi = infl_hi   > 0 if infl_hi   is not None else pd.Series(False, index=out.index)
+
+    # Risk-off if VIX in top 20% or credit spreads > +1σ
+    risk_off = pd.Series(False, index=out.index)
+    if vix_pct is not None:
+        risk_off = risk_off | (vix_pct >= 0.80)
+    if hy_z is not None:
+        risk_off = risk_off | (hy_z >= 1.0)
+    if ig_z is not None:
+        risk_off = risk_off | (ig_z >= 1.0)
+
+    # Encode regime as 0..5 (3-bit style): (Growth, Inflation, Risk)
+    # 0: low growth, low inflation, risk-on … up to 5: high growth, high inflation, risk-off
+    out["Regime_GIR"] = (grow_up.astype(int) * 2) + (infl_hi.astype(int)) + (risk_off.astype(int) * 3)
+
+    # Human-readable label (optional)
+    labels = {
+        0: "Low Growth • Low Inflation • Risk-ON",
+        1: "Low Growth • High Inflation • Risk-ON",
+        2: "High Growth • Low Inflation • Risk-ON",
+        3: "Low Growth • Low Inflation • Risk-OFF",
+        4: "High Growth • High Inflation • Risk-ON",
+        5: "High Growth • High Inflation • Risk-OFF",
+    }
+    out["Regime_GIR_Label"] = out["Regime_GIR"].map(labels)
+
+    return out
+
+# ---------- helpers (no leakage) ----------
+def expanding_mean(s: pd.Series) -> pd.Series:
+    return s.expanding().mean().shift(1)
+
+def expanding_std(s: pd.Series) -> pd.Series:
+    return s.expanding().std().shift(1).replace(0, np.nan)
+
+def expanding_z(s: pd.Series) -> pd.Series:
+    m, v = expanding_mean(s), expanding_std(s)
+    return (s - m) / v
+
+def expanding_percentile(s: pd.Series) -> pd.Series:
+    # Percentile of current value within *past* history
+    ranks = []
+    vals = s.values
+    for i in range(len(s)):
+        if i == 0 or pd.isna(vals[i]):
+            ranks.append(np.nan)
+            continue
+        hist = pd.Series(vals[:i]).dropna()
+        if len(hist) == 0:
+            ranks.append(np.nan)
+        else:
+            ranks.append((hist <= vals[i]).mean())
+    return pd.Series(ranks, index=s.index)
+
+def add_simple_macro_features(df_m: pd.DataFrame) -> pd.DataFrame:
+    """
+    Expects monthly index. Creates common, interpretable features.
+    Works even if some inputs are missing.
+    """
+    out = df_m.copy()
+
+    # Safe getters by FRED id (rename if your columns differ)
+    CPI   = out.get("CPIAUCSL")     # CPI level (index)
+    PAY   = out.get("PAYEMS")       # Nonfarm payrolls level
+    DFF   = out.get("DFF")          # Fed funds (daily, will be resampled)
+    DGS10 = out.get("DGS10")        # 10Y Treasury yield (daily, will be resampled)
+    VIX   = out.get("VIXCLS")       # VIX (daily, will be resampled)
+    HY    = out.get("BAMLH0A0HYM2") # HY OAS (optional)
+    IG    = out.get("BAMLC0A0CM")   # IG OAS (optional)
+
+    # YoY rates (use pct_change(12) on monthly)
+    if CPI is not None:
+        out["CPI_YoY"] = CPI.pct_change(12) * 100
+    if PAY is not None:
+        out["PAYEMS_YoY"] = PAY.pct_change(12) * 100
+
+    # Yield curve slope (10y - policy/short rate)
+    if (DGS10 is not None) and (DFF is not None):
+        out["YC_Slope"] = DGS10 - DFF
+
+    # Credit spreads & VIX percentiles (risk appetite)
+    if VIX is not None:
+        out["VIX_pctile"] = expanding_percentile(VIX)
+    if HY is not None:
+        out["HY_OAS_z"] = expanding_z(HY)
+    if IG is not None:
+        out["IG_OAS_z"] = expanding_z(IG)
+
+    # Z-scores for growth/inflation proxies (no leakage)
+    if "CPI_YoY" in out:
+        out["CPI_YoY_z"] = expanding_z(out["CPI_YoY"])
+    if "PAYEMS_YoY" in out:
+        out["PAYEMS_YoY_z"] = expanding_z(out["PAYEMS_YoY"])
+    if "YC_Slope" in out:
+        out["YC_Slope_z"] = expanding_z(out["YC_Slope"])
+
+    return out
+
+def macro_data_orchestrator(
+    macro_funcs_to_fetch: list,
+    fred_series_ids_dict: dict,
+    start_date: str = None,
+    save_path: str = None,
+    output_freq: str = "M",       # "M" for monthly (recommended) or "D" for daily-ffilled
+    add_simple_features: bool = True,
+    add_simple_regime: bool = True,
+) -> pd.DataFrame:
+    """
+    Fetches FRED series, merges them into a single DataFrame, builds simple
+    macro features/regimes, and returns a modeling-ready time series.
+
+    Pipeline:
+      1) Fetch each requested FRED series and concatenate on the date index.
+      2) Resample to monthly ('M') using last observation.
+      3) Optionally add lightweight features (YoY, yield-curve slope, z-scores,
+         VIX/credit percentiles) and an interpretable Growth/Inflation/Risk regime.
+      4) Optionally forward-fill to daily at the end if output_freq='D'.
+      5) Optionally save the result to CSV.
 
     Args:
-        macro_funcs_to_fetch (list): List of macroeconomic indicators to fetch.
-        fred_series_ids_dict (dict): A dictionary mapping function names to FRED series IDs.
-        start_date (str, optional): The start date for the data (YYYY-MM-DD). 
-                                     Defaults to None, which fetches all available data.
+        macro_funcs_to_fetch (list[str]): Logical series names to fetch.
+        fred_series_ids_dict (dict[str, str]): Map from logical name to FRED series ID.
+        start_date (str | None): Start date ('YYYY-MM-DD'); None fetches all available history.
+        save_path (str | None): Directory to write 'macros.csv' (if provided).
+        output_freq (str): 'M' (default, recommended) or 'D' (daily via forward-fill).
+        add_simple_features (bool): If True, adds Tier-1 macro features. Default True.
+        add_simple_regime (bool): If True, adds interpretable GIR regime label. Default True.
 
     Returns:
-        pd.DataFrame: A single, comprehensive DataFrame with all data.
+        pd.DataFrame: Wide, time-indexed DataFrame at the requested frequency with
+        raw series plus any added features/regimes, sorted by date.
     """
     print("Starting FRED data orchestration pipeline...")
-    final_df = pd.DataFrame()
+    frames = []
 
-    for func_name in macro_funcs_to_fetch:
+    # 1) Fetch (keep native freq; most are monthly; some daily)
+    for func_name in macro_funcs_to_fetch:  # make sure this is a LIST, not a set
         series_id = fred_series_ids_dict.get(func_name)
         if not series_id:
-            print(f"Warning: No FRED series ID found for function '{func_name}'. Skipping.")
+            print(f"Warning: No FRED series ID for '{func_name}'. Skipping.")
             continue
 
         print(f"Fetching and processing data for: {func_name} ({series_id})")
-        
-        # Pass the start_date to the fetching function
-        macro_df = FRED_fetch_macro_data(series_id, start_date=start_date)
+        macro_df = FRED_fetch_macro_data(series_id, start_date=start_date)  # expected to return a datetime index, one column
+        if macro_df is None or macro_df.empty:
+            continue
 
-        if not macro_df.empty:
-            # Resample to daily frequency and forward-fill missing values
-            # This is a critical step for data alignment
-            macro_df = macro_df.asfreq('D').ffill()
+        # Standardize column name as its series id if needed
+        if macro_df.shape[1] == 1 and macro_df.columns[0] != series_id:
+            macro_df = macro_df.rename(columns={macro_df.columns[0]: series_id})
 
-            # Merge with the final_df
-            if final_df.empty:
-                final_df = macro_df
-            else:
-                # Use an outer join to ensure all dates are kept
-                final_df = final_df.merge(macro_df, left_index=True, right_index=True, how='outer')
-    
-    # (1) Yield curve moments if yields available
-    final_df = add_yield_curve_moments(final_df)
+        frames.append(macro_df)
 
-    # (2) Risk appetite proxies if you have spreads/VIX in your series set
-    # map FRED series names to logical keys if present
+    if not frames:
+        print("No data fetched.")
+        return pd.DataFrame()
+
+    # 2) Merge
+    final_df = pd.concat(frames, axis=1).sort_index()
+
+    # 3) Resample to monthly *once* (fast & appropriate for macro)
+    #    - For daily series like DFF/DGS10/VIX, 'last' is fine for macro state
+    monthly_df = final_df.resample("M").last()
+
+    # 4) Add interpretable features + regimes
+    if add_simple_features:
+        monthly_df = add_simple_macro_features(monthly_df)
+    # if add_simple_regime:
+    #     monthly_df = add_simple_regimes(monthly_df)
+
+    # 5) Optional: compute other light features you already had
+    monthly_df = add_yield_curve_moments(monthly_df)  # safe – runs on monthly
+    # Risk appetite proxies (if you still want your existing version)
     spread_map = {}
     for k, cand in [("HY_OAS", "BAMLH0A0HYM2"), ("IG_OAS", "BAMLC0A0CM"), ("VIX", "VIXCLS")]:
-        if cand in final_df.columns:
+        if cand in monthly_df.columns:
             spread_map[k] = cand
     if spread_map:
-        final_df = add_risk_appetite_proxies(final_df, spread_cols=spread_map)
+        monthly_df = add_risk_appetite_proxies(monthly_df, spread_cols=spread_map)
 
-    # (3) Macro PCA + KMeans regimes (uses all numeric macro columns)
-    final_df = add_macro_pca_kmeans_regimes(final_df, n_components=5, n_clusters=3, lookback=252)
+    monthly_df.dropna(how="all", inplace=True)
 
-    # After all data is merged, drop rows with all NaN values to clean up the timeline
-    if not final_df.empty:
-        final_df.dropna(how='all', inplace=True)
+    # 6) Output frequency
+    if output_freq == "D":
+        # Forward-fill monthly features to daily calendar if you truly need daily rows
+        # Use the union of original daily indices to avoid creating massive ranges
+        daily_index = final_df.index  # contains all original daily points
+        out_df = monthly_df.reindex(daily_index, method="ffill")
+    else:
+        out_df = monthly_df
 
-    # Save to CSV if a filename is provided
+    # 7) Save
     if save_path:
-        out_path = os.path.join(save_path, f"macros.csv")
-        final_df.to_csv(out_path, index=True)
+        out_path = os.path.join(save_path, "macros.csv")
+        out_df.to_csv(out_path, index=True)
+        print(f"Saved to {out_path}")
 
     print("Data orchestration complete.")
-    return final_df.sort_index()
+    return out_df.sort_index()
 
 
 def safe_shift(df: pd.DataFrame, cols: Sequence[str], lag: int = 1) -> pd.DataFrame:
@@ -523,7 +737,7 @@ def add_macro_surprises(actual_df: pd.DataFrame,
     out = actual_df.copy()
 
     if expectations_df is not None and mapping:
-        exp = normalize_date_col(expectations_df, col='Date').sort_values('Date').drop_duplicates('Date').set_index('Date')
+        exp = normalize_date_index(expectations_df, col='Date').sort_values('Date').drop_duplicates('Date').set_index('Date')
         for actual_col, exp_col in mapping.items():
             if actual_col in out.columns and exp_col in exp.columns:
                 # As-of merge expected values (backward fill)
