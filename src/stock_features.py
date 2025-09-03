@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from pykalman import KalmanFilter
-from src.stock_data import fetch_multiple_stock_data
+from todo.stock_data import fetch_multiple_stock_data
 
 EPS = 1e-9
 
@@ -14,6 +14,13 @@ def _has_cols(df, cols):
 
 def _has_volume(df, prefix):
     return f"Volume_{prefix}" in df.columns
+
+def shift_to_t_minus_1(df: pd.DataFrame, cols, lag: int = 1) -> pd.DataFrame:
+    out = df.copy()
+    for c in cols:
+        if c in out.columns:
+            out[c] = out[c].shift(lag)
+    return out
 
 def calculate_daily_returns(df_input, cols_to_process=['Close']):
     """
@@ -169,8 +176,6 @@ def calculate_atr(df_input, ticker_prefix, window=14):
     else:
         print(f"Warning: {tr} not found for {ticker_prefix} → ATR skipped.")
         df[col] = np.nan
-    return df
-    
     return df
 
 def add_volume_features(df_input, ticker_prefix, window=20):
@@ -799,13 +804,11 @@ def add_gap_features(df, prefix):
     if o is None or c is None: 
         return df
     prev_c = c.shift(1)
-    gap = _safe_div(o - prev_c, (prev_c + EPS))
+    gap = _safe_div(o - prev_c, prev_c)
     df[f'{prefix}_gap_overnight'] = gap
     atr = df.get(f'{prefix}_ATR14')
-    atr = df.get(f'{prefix}_ATR14') if atr is None else atr  # guard typo
-    atr = df.get(f'{prefix}_ATR14')
     if atr is not None:
-        df[f'{prefix}_gap_vs_ATR'] = (gap.abs()) / (_safe_div(atr, (prev_c + EPS)) + EPS)
+        df[f'{prefix}_gap_vs_ATR'] = gap.abs() / _safe_div(atr, prev_c)
     return df
 
 def add_drawdown_features(df, prefix, window=252):
@@ -855,6 +858,24 @@ def add_rolling_corr(df, stock, peer, window=60):
     df[f'{stock}_corr_{peer}_{window}'] = s.rolling(window).corr(p)
     return df
 
+def add_equity_liquidity_proxies(df: pd.DataFrame, prefix: str, window: int = 20) -> pd.DataFrame:
+    """
+    Simple equity liquidity proxies:
+    - Amihud-like illiquidity: |ret|/volume (needs volume)
+    - Turnover: volume / rolling sum(volume)
+    """
+    out = df.copy()
+    c = f'Close_{prefix}'
+    v = f'Volume_{prefix}'
+    if c in out.columns and v in out.columns:
+        ret = out[c].pct_change().abs()
+        vol = out[v].replace(0, np.nan)
+        out[f'{prefix}_amihud_{window}'] = (ret / vol).rolling(window, min_periods=window).mean()
+        out[f'{prefix}_turnover_{window}'] = vol / vol.rolling(window, min_periods=window).sum()
+        # shift to t-1
+        out[f'{prefix}_amihud_{window}'] = out[f'{prefix}_amihud_{window}'].shift(1)
+        out[f'{prefix}_turnover_{window}'] = out[f'{prefix}_turnover_{window}'].shift(1)
+    return out
 
 def build_stock_features_orchestrator(
     tickers, 
@@ -1008,6 +1029,12 @@ def build_sector_base_features(
         df = add_streak_features(df, p)
         df = add_range_volatility(df, p, window=20)
         df = add_rolling_autocorr(df, p, window=20, lag=1)
+        df = add_equity_liquidity_proxies(df, p, window=20)
+
+        leak_sensitive = [f'{p}_MACD_Line', f'{p}_MACD_Signal', f'{p}_MACD_Hist',
+                  f'{p}_RSI14', f'{p}_parkinson_20',
+                  f'{p}_BB_Middle20', f'{p}_BB_Upper20', f'{p}_BB_Lower20']
+        df = shift_to_t_minus_1(df, [c for c in leak_sensitive if c in df.columns])
 
     # daily returns for all Close_*
     close_cols = [c for c in df.columns if c.startswith("Close_")]

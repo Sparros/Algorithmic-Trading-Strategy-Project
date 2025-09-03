@@ -945,3 +945,20 @@ def pick_split_by_event_count(X_events, train_frac=0.75, val_frac=0.15):
     train_end = idx[int(train_frac * n) - 1]
     val_end   = idx[int((train_frac + val_frac) * n) - 1]
     return str(train_end.date()), str(val_end.date())
+
+def time_blocks_with_purge_embargo(n: int, n_splits: int = 5, purge: int = 5, embargo: int = 5):
+    """
+    Generator of (train_idx, test_idx) for ordered data [0..n-1] with purge+embargo.
+    Use in modelling stage for Lopez de Prado style CV.
+    """
+    fold = n // n_splits
+    for i in range(n_splits):
+        test_start = i * fold
+        test_end   = (i+1) * fold if i < n_splits - 1 else n
+        train_end  = max(0, test_start - purge)
+        train_idx  = np.arange(0, train_end)
+        test_idx   = np.arange(test_start, test_end)
+        # embargo after test
+        emb_start  = min(n, test_end + embargo)
+        train_idx  = np.concatenate([train_idx, np.arange(emb_start, n)])
+        yield train_idx, test_idx
