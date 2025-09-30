@@ -72,7 +72,7 @@ Backtesting simulates how the strategy would have performed historically. Two le
   - Train once, test over a fixed period.  
   - Fast sanity check, but suffers from look-ahead bias.  
 
-- **Walk-Forward Backtest (gold standard)**  
+- **Walk-Forward Backtest**  
   - Rolling window: train on past, predict on next slice, repeat.  
   - Mirrors real-world deployment.  
   - Built with modular strategy classes (`ContinuousAllocationStrategy`, `MLProbabilisticStrategy`) so logic is clean and reusable.  
@@ -82,7 +82,7 @@ Backtesting simulates how the strategy would have performed historically. Two le
 
 ## 5. QA Sweep & Triage  
 
-To reduce wasted cycles on flawed experiments, the project includes two layers of quality control:  
+To reduce time spent on poor datasets or low accuracy models, the project includes two layers of quality control:  
 
 - **QA Sweep**  
   - Runs automated checks at multiple points in the workflow.  
